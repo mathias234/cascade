@@ -1,0 +1,29 @@
+# Environment variables
+.env
+
+# HLS output directory
+hls/
+*.m3u8
+*.ts
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock for libraries
+Cargo.lock
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,32 @@
+services:
+  cascade:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cascade
+    restart: unless-stopped
+    volumes:
+      - ./hls:/hls
+    environment:
+      - SOURCE_HOST=${SOURCE_HOST}
+      - SOURCE_PORT=${SOURCE_PORT}
+      - STREAM_TIMEOUT=${STREAM_TIMEOUT}
+      - MAX_CONCURRENT_STREAMS=${MAX_CONCURRENT_STREAMS}
+      - STREAM_START_TIMEOUT=${STREAM_START_TIMEOUT}
+      - RUST_LOG=${RUST_LOG}
+      - HLS_PATH=${HLS_PATH}
+      - PORT=${PORT}
+    ports:
+      - "80:8080"
+    networks:
+      - streaming
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  streaming:
+    driver: bridge
