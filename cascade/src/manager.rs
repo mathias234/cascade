@@ -3,8 +3,8 @@ use crate::models::{Stats, StreamInfo};
 use crate::sessions::SessionManager;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use std::{
-    collections::HashMap,
     env,
     path::PathBuf,
     process::Stdio,
@@ -26,12 +26,12 @@ pub struct StreamManager {
     pub stream_timeout: Duration,
     pub max_concurrent_streams: usize,
     pub stream_start_timeout: Duration,
-    pub active_streams: Arc<RwLock<HashMap<String, StreamInfo>>>,
-    pub pending_streams: Arc<RwLock<HashMap<String, DateTime<Utc>>>>,
-    pub failed_streams: Arc<RwLock<HashMap<String, DateTime<Utc>>>>,
+    pub active_streams: DashMap<String, StreamInfo>,
+    pub pending_streams: DashMap<String, DateTime<Utc>>,
+    pub failed_streams: DashMap<String, DateTime<Utc>>,
     pub stats: Arc<RwLock<Stats>>,
-    pub cache: Arc<SegmentCache>,
-    pub session_manager: Arc<SessionManager>,
+    pub cache: SegmentCache,
+    pub session_manager: SessionManager,
 }
 
 impl StreamManager {
@@ -82,9 +82,9 @@ impl StreamManager {
             stream_timeout,
             max_concurrent_streams,
             stream_start_timeout,
-            active_streams: Arc::new(RwLock::new(HashMap::new())),
-            pending_streams: Arc::new(RwLock::new(HashMap::new())),
-            failed_streams: Arc::new(RwLock::new(HashMap::new())),
+            active_streams: DashMap::new(),
+            pending_streams: DashMap::new(),
+            failed_streams: DashMap::new(),
             stats: Arc::new(RwLock::new(Stats {
                 started: 0,
                 stopped: 0,
@@ -92,8 +92,8 @@ impl StreamManager {
                 requests: 0,
                 total_viewers: 0,
             })),
-            cache: Arc::new(SegmentCache::new(cache_entries, max_segment_size)),
-            session_manager: Arc::new(SessionManager::new()),
+            cache: SegmentCache::new(cache_entries, max_segment_size),
+            session_manager: SessionManager::new(),
         })
     }
 
@@ -125,41 +125,26 @@ impl StreamManager {
     }
 
     pub async fn start_stream(&self, stream_key: String) -> Result<bool> {
-        {
-            let active = self.active_streams.read().await;
-            if active.contains_key(&stream_key) {
-                debug!("Stream {} already active", stream_key);
-                return Ok(true);
-            }
+        if self.active_streams.contains_key(&stream_key) {
+            debug!("Stream {} already active", stream_key);
+            return Ok(true);
         }
 
-        {
-            let pending = self.pending_streams.read().await;
-            if pending.contains_key(&stream_key) {
-                debug!("Stream {} already pending", stream_key);
-                return Ok(true);
-            }
+        if self.pending_streams.contains_key(&stream_key) {
+            debug!("Stream {} already pending", stream_key);
+            return Ok(true);
         }
 
-        {
-            let active = self.active_streams.read().await;
-            if active.len() >= self.max_concurrent_streams {
-                warn!("Max concurrent streams ({}) reached, cannot start {}", 
-                    self.max_concurrent_streams, stream_key);
-                return Ok(false);
-            }
+        if self.active_streams.len() >= self.max_concurrent_streams {
+            warn!("Max concurrent streams ({}) reached, cannot start {}",
+                self.max_concurrent_streams, stream_key);
+            return Ok(false);
         }
 
         // Remove from failed streams to allow immediate retry
-        {
-            let mut failed = self.failed_streams.write().await;
-            failed.remove(&stream_key);
-        }
+        self.failed_streams.remove(&stream_key);
 
-        {
-            let mut pending = self.pending_streams.write().await;
-            pending.insert(stream_key.clone(), Utc::now());
-        }
+        self.pending_streams.insert(stream_key.clone(), Utc::now());
 
         debug!("Spawning FFmpeg for stream: {}", stream_key);
 
@@ -220,25 +205,16 @@ impl StreamManager {
                                 error!("FFmpeg I/O error for stream {} (source unavailable or disconnected): {}", stream_key_clone, line);
 
                                 // Remove from pending if still there
-                                {
-                                    let mut pending = pending_streams_clone.write().await;
-                                    pending.remove(&stream_key_clone);
-                                }
+                                pending_streams_clone.remove(&stream_key_clone);
 
                                 // Remove from active streams
-                                {
-                                    let mut active = active_streams_clone.write().await;
-                                    if let Some(stream_info) = active.remove(&stream_key_clone) {
-                                        let mut process = stream_info.process.lock().await;
-                                        let _ = process.kill().await;
-                                    }
+                                if let Some((_, stream_info)) = active_streams_clone.remove(&stream_key_clone) {
+                                    let mut process = stream_info.process.lock().await;
+                                    let _ = process.kill().await;
                                 }
 
                                 // Mark stream as failed
-                                {
-                                    let mut failed = failed_streams_clone.write().await;
-                                    failed.insert(stream_key_clone.clone(), Utc::now());
-                                }
+                                failed_streams_clone.insert(stream_key_clone.clone(), Utc::now());
 
                                 break;
                             }
@@ -267,15 +243,9 @@ impl StreamManager {
                     last_accessed: Arc::new(RwLock::new(Utc::now())),
                 };
 
-                {
-                    let mut active = self.active_streams.write().await;
-                    active.insert(stream_key.clone(), stream_info);
-                }
+                self.active_streams.insert(stream_key.clone(), stream_info);
 
-                {
-                    let mut pending = self.pending_streams.write().await;
-                    pending.remove(&stream_key);
-                }
+                self.pending_streams.remove(&stream_key);
 
                 {
                     let mut stats = self.stats.write().await;
@@ -287,15 +257,9 @@ impl StreamManager {
             Err(e) => {
                 error!("Failed to start stream {}: {}", stream_key, e);
                 
-                {
-                    let mut pending = self.pending_streams.write().await;
-                    pending.remove(&stream_key);
-                }
-                
-                {
-                    let mut failed = self.failed_streams.write().await;
-                    failed.insert(stream_key, Utc::now());
-                }
+                self.pending_streams.remove(&stream_key);
+
+                self.failed_streams.insert(stream_key, Utc::now());
                 
                 {
                     let mut stats = self.stats.write().await;
@@ -310,10 +274,7 @@ impl StreamManager {
     pub async fn stop_stream(&self, stream_key: &str) -> Result<()> {
         info!("Stopping stream: {}", stream_key);
 
-        let stream_info = {
-            let mut active = self.active_streams.write().await;
-            active.remove(stream_key)
-        };
+        let stream_info = self.active_streams.remove(stream_key).map(|(_, v)| v);
 
         if let Some(info) = stream_info {
             let mut process = info.process.lock().await;
@@ -363,29 +324,20 @@ impl StreamManager {
 
     pub async fn wait_for_stream(&self, stream_key: String) -> bool {
         // Check if stream is already active and ready
-        {
-            let active = self.active_streams.read().await;
-            if active.contains_key(&stream_key) {
-                // Stream is already active, check if it's ready
-                if self.stream_ready(&stream_key).await {
-                    if let Some(stream) = active.get(&stream_key) {
-                        let mut last_accessed = stream.last_accessed.write().await;
-                        *last_accessed = Utc::now();
-                    }
-                    debug!("Stream {} already active and ready", stream_key);
-                    return true;
-                }
-                // Stream is active but not ready yet, fall through to wait
-                debug!("Stream {} is active but not ready yet", stream_key);
+        if let Some(stream) = self.active_streams.get(&stream_key) {
+            // Stream is already active, check if it's ready
+            if self.stream_ready(&stream_key).await {
+                let mut last_accessed = stream.last_accessed.write().await;
+                *last_accessed = Utc::now();
+                debug!("Stream {} already active and ready", stream_key);
+                return true;
             }
+            // Stream is active but not ready yet, fall through to wait
+            debug!("Stream {} is active but not ready yet", stream_key);
         }
 
         // Try to start the stream if it's not already starting
-        let need_to_start = {
-            let pending = self.pending_streams.read().await;
-            let active = self.active_streams.read().await;
-            !pending.contains_key(&stream_key) && !active.contains_key(&stream_key)
-        };
+        let need_to_start = !self.pending_streams.contains_key(&stream_key) && !self.active_streams.contains_key(&stream_key);
 
         if need_to_start {
             info!("Starting stream: {}", stream_key);
@@ -402,8 +354,7 @@ impl StreamManager {
 
         while start.elapsed() < self.stream_start_timeout {
             if self.stream_ready(&stream_key).await {
-                let active = self.active_streams.read().await;
-                if let Some(stream) = active.get(&stream_key) {
+                if let Some(stream) = self.active_streams.get(&stream_key) {
                     let mut last_accessed = stream.last_accessed.write().await;
                     *last_accessed = Utc::now();
                 }
@@ -411,12 +362,9 @@ impl StreamManager {
                 return true;
             }
 
-            {
-                let failed = self.failed_streams.read().await;
-                if failed.contains_key(&stream_key) {
-                    error!("Stream {} failed to start", stream_key);
-                    return false;
-                }
+            if self.failed_streams.contains_key(&stream_key) {
+                error!("Stream {} failed to start", stream_key);
+                return false;
             }
 
             time::sleep(check_interval).await;
@@ -439,17 +387,16 @@ impl StreamManager {
 
             let mut streams_to_stop = Vec::new();
 
-            {
-                let active = self.active_streams.read().await;
-                info!("Checking {} active streams for health", active.len());
+            info!("Checking {} active streams for health", self.active_streams.len());
 
-                for (stream_key, stream_info) in active.iter() {
-                    let last_accessed = stream_info.last_accessed.read().await;
-                    let idle_duration = Utc::now().signed_duration_since(*last_accessed);
+            for entry in self.active_streams.iter() {
+                let stream_key = entry.key();
+                let stream_info = entry.value();
+                let last_accessed = stream_info.last_accessed.read().await;
+                let idle_duration = Utc::now().signed_duration_since(*last_accessed);
 
-                    if idle_duration.num_seconds() > self.stream_timeout.as_secs() as i64 {
-                        streams_to_stop.push(stream_key.clone());
-                    }
+                if idle_duration.num_seconds() > self.stream_timeout.as_secs() as i64 {
+                    streams_to_stop.push(stream_key.clone());
                 }
             }
 
@@ -468,8 +415,7 @@ impl StreamManager {
     }
 
     pub async fn update_stream_access(&self, stream_key: &str) {
-        let active = self.active_streams.read().await;
-        if let Some(stream) = active.get(stream_key) {
+        if let Some(stream) = self.active_streams.get(stream_key) {
             let mut last_accessed = stream.last_accessed.write().await;
             *last_accessed = Utc::now();
             debug!("Updated access time for stream {}", stream_key);
@@ -479,15 +425,11 @@ impl StreamManager {
     pub async fn graceful_shutdown(&self) {
         info!("Starting graceful shutdown...");
         
-        {
-            let mut pending = self.pending_streams.write().await;
-            pending.clear();
-        }
+        self.pending_streams.clear();
 
-        let active_keys: Vec<String> = {
-            let active = self.active_streams.read().await;
-            active.keys().cloned().collect()
-        };
+        let active_keys: Vec<String> = self.active_streams.iter()
+            .map(|entry| entry.key().clone())
+            .collect();
 
         for stream_key in active_keys {
             if let Err(e) = self.stop_stream(&stream_key).await {

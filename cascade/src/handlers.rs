@@ -3,7 +3,7 @@ use crate::models::{HealthResponse, StatusResponse, StreamStatus};
 use axum::{
     body::Body,
     extract::{Path, Query, Request},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{IntoResponse, Json, Response},
 };
 use chrono::Utc;
@@ -23,7 +23,10 @@ pub async fn serve_hls_content(
     _req: Request,
     manager: Arc<StreamManager>,
 ) -> impl IntoResponse {
-    debug!("HLS request for path: {} with context: {:?}", path, query.hls_ctx);
+    debug!(
+        "HLS request for path: {} with context: {:?}",
+        path, query.hls_ctx
+    );
 
     // Parse the path to determine what's being requested
     if path.ends_with(".m3u8") {
@@ -68,24 +71,21 @@ pub async fn serve_hls_content(
 }
 
 /// Serve master playlist that redirects to actual playlist with context
-async fn serve_master_playlist(
-    stream_key: &str,
-    manager: Arc<StreamManager>,
-) -> Response<Body> {
-    debug!("Master playlist request for stream: {} (no context)", stream_key);
+async fn serve_master_playlist(stream_key: &str, manager: Arc<StreamManager>) -> Response<Body> {
+    debug!(
+        "Master playlist request for stream: {} (no context)",
+        stream_key
+    );
 
     // Ensure stream is started
     if !manager.wait_for_stream(stream_key.to_string()).await {
         // Check if stream failed (RTMP source doesn't exist)
-        {
-            let failed = manager.failed_streams.read().await;
-            if failed.contains_key(stream_key) {
-                info!("Stream {} failed - RTMP source not found", stream_key);
-                return Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::from("Stream not found"))
-                    .unwrap();
-            }
+        if manager.failed_streams.contains_key(stream_key) {
+            info!("Stream {} failed - RTMP source not found", stream_key);
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Stream not found"))
+                .unwrap();
         }
 
         // Stream couldn't start for other reasons
@@ -125,7 +125,10 @@ async fn serve_actual_playlist(
     session_id: Option<String>,
     manager: Arc<StreamManager>,
 ) -> Response<Body> {
-    debug!("Actual playlist request for stream: {} with session: {:?}", stream_key, session_id);
+    debug!(
+        "Actual playlist request for stream: {} with session: {:?}",
+        stream_key, session_id
+    );
 
     // Update session if context provided
     if let Some(sid) = &session_id {
@@ -161,7 +164,11 @@ async fn serve_actual_playlist(
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            debug!("Serving playlist for stream {} ({} bytes)", stream_key, modified_content.len());
+            debug!(
+                "Serving playlist for stream {} ({} bytes)",
+                stream_key,
+                modified_content.len()
+            );
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
@@ -180,12 +187,11 @@ async fn serve_actual_playlist(
 }
 
 /// Serve segment files
-async fn serve_segment(
-    stream_key: &str,
-    segment: &str,
-    manager: Arc<StreamManager>,
-) -> Response<Body> {
-    debug!("Segment request for stream: {}, segment: {}", stream_key, segment);
+async fn serve_segment(stream_key: &str, segment: &str, manager: Arc<StreamManager>) -> Response<Body> {
+    debug!(
+        "Segment request for stream: {}, segment: {}",
+        stream_key, segment
+    );
 
     // Update stats
     {
@@ -232,8 +238,8 @@ async fn serve_segment(
 }
 
 pub async fn health_check(manager: Arc<StreamManager>) -> impl IntoResponse {
-    let active_count = manager.active_streams.read().await.len();
-    let pending_count = manager.pending_streams.read().await.len();
+    let active_count = manager.active_streams.len();
+    let pending_count = manager.pending_streams.len();
     let mut stats = manager.stats.read().await.clone();
 
     // Update total viewer count using sessions
@@ -242,7 +248,11 @@ pub async fn health_check(manager: Arc<StreamManager>) -> impl IntoResponse {
     let healthy = active_count < manager.max_concurrent_streams;
 
     let response = HealthResponse {
-        status: if healthy { "healthy".to_string() } else { "unhealthy".to_string() },
+        status: if healthy {
+            "healthy".to_string()
+        } else {
+            "unhealthy".to_string()
+        },
         active_streams: active_count,
         pending_streams: pending_count,
         max_streams: manager.max_concurrent_streams,
@@ -257,11 +267,12 @@ pub async fn health_check(manager: Arc<StreamManager>) -> impl IntoResponse {
 }
 
 pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
-    let active = manager.active_streams.read().await;
     let now = Utc::now();
 
     let mut active_streams = Vec::new();
-    for (key, info) in active.iter() {
+    for entry in manager.active_streams.iter() {
+        let key = entry.key();
+        let info = entry.value();
         let last_accessed = info.last_accessed.read().await;
 
         active_streams.push(StreamStatus {
@@ -273,11 +284,17 @@ pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
         });
     }
 
-    let pending_streams: Vec<String> = manager.pending_streams.read().await
-        .keys().cloned().collect();
+    let pending_streams: Vec<String> = manager
+        .pending_streams
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect();
 
-    let failed_streams: Vec<String> = manager.failed_streams.read().await
-        .keys().cloned().collect();
+    let failed_streams: Vec<String> = manager
+        .failed_streams
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect();
 
     let mut stats = manager.stats.read().await.clone();
     stats.total_viewers = manager.session_manager.get_total_viewer_count();
@@ -289,3 +306,4 @@ pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
         stats,
     })
 }
+

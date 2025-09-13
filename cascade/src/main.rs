@@ -113,7 +113,6 @@ async fn main() -> Result<()> {
 
     let server = axum::serve(listener, app);
 
-    let manager_shutdown = manager.clone();
     tokio::select! {
         result = server => {
             if let Err(e) = result {
@@ -122,7 +121,7 @@ async fn main() -> Result<()> {
         }
         _ = signal::ctrl_c() => {
             info!("Received SIGINT, shutting down gracefully...");
-            manager_shutdown.graceful_shutdown().await;
+            manager.graceful_shutdown().await;
         }
     }
 
