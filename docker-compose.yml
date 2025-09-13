@@ -16,6 +16,8 @@ services:
       - RUST_LOG=${RUST_LOG}
       - HLS_PATH=${HLS_PATH}
       - PORT=${PORT}
+      - VIEWER_TRACKING_ENABLED=${VIEWER_TRACKING_ENABLED}
+      - VIEWER_TIMEOUT_SECONDS=${VIEWER_TIMEOUT_SECONDS}
     ports:
       - "80:8080"
     networks:

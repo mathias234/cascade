@@ -6,9 +6,10 @@ A high-performance HLS (HTTP Live Streaming) edge server built in Rust. Cascade 
 
 - **RTMP to HLS Conversion**: Seamlessly converts RTMP streams to HLS format using FFmpeg
 - **Smart Caching**: In-memory caching system for optimal performance
+- **Real-time Viewer Tracking**: Track active viewers per stream with privacy-focused implementation
 - **High Performance**: Built with Rust and Tokio for excellent concurrent performance
 - **Auto-scaling**: Manages multiple concurrent streams with configurable limits
-- **Health Monitoring**: Built-in health checks and stream status endpoints
+- **Health Monitoring**: Built-in health checks and stream status endpoints with viewer metrics
 
 ## Quick Start
 
@@ -44,19 +45,28 @@ Configure Cascade using environment variables in your `.env` file:
 - `MAX_CONCURRENT_STREAMS` - Maximum concurrent streams (default: 50)
 - `HLS_PATH` - Directory for HLS output (default: /hls)
 - `PORT` - HTTP server port (default: 8080)
+- `VIEWER_TRACKING_ENABLED` - Enable viewer tracking (default: true)
+- `VIEWER_TIMEOUT_SECONDS` - Seconds before marking viewer inactive (default: 30)
 
 ## API Endpoints
 
 - `GET /live/{stream_key}/playlist.m3u8` - HLS playlist for a stream
 - `GET /live/{stream_key}/{segment}.ts` - HLS video segments
-- `GET /health` - Health check endpoint
-- `GET /status` - Detailed status of all active streams
+- `GET /health` - Health check endpoint with total viewer count
+- `GET /status` - Detailed status of all active streams including viewer counts
 
 ## Architecture
 
+### Caching Strategy
 Cascade uses a sophisticated caching strategy:
 - **M3U8 Playlists**: Always served fresh from disk (never cached)
 - **TS Segments**: In-memory caching for fast segment delivery
+
+### Viewer Tracking
+- **Privacy-focused**: Only stores SHA-256 hashes of IP + User-Agent
+- **Efficient**: DashMap-based storage for lock-free concurrent access
+- **Accurate**: Tracks only on playlist requests to avoid overcounting
+- **Automatic cleanup**: Removes inactive viewers after configurable timeout
 
 ## License
 

@@ -7,10 +7,12 @@ edition = "2024"
 anyhow = "1.0.99"
 axum = "0.8.4"
 bytes = "1.5"
-chrono = "0.4.42"
+chrono = { version = "0.4.42", features = ["serde"] }
+dashmap = "6.1"
 moka = { version = "0.12.10", features = ["future"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.143"
+sha2 = "0.10"
 tokio = { version = "1.47.1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tower = "0.5"

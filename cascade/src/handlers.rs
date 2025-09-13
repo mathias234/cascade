@@ -1,8 +1,9 @@
+use crate::ClientInfo;
 use crate::manager::StreamManager;
 use crate::models::{HealthResponse, StatusResponse, StreamStatus};
 use axum::{
     body::Body,
-    extract::Path,
+    extract::{Path, Request},
     http::{header, StatusCode},
     response::{IntoResponse, Json, Response},
 };
@@ -12,6 +13,7 @@ use tracing::{debug, error, info};
 
 pub async fn serve_hls(
     Path(file_name): Path<String>,
+    req: Request,
     manager: Arc<StreamManager>,
 ) -> impl IntoResponse {
     debug!("HLS request for file: {}", file_name);
@@ -49,7 +51,7 @@ pub async fn serve_hls(
     
     manager.update_stream_access(&stream_key).await;
 
-    // For .m3u8 files, ensure stream is started
+    // For .m3u8 files, ensure stream is started and track viewer
     if file_type == "m3u8" {
         debug!("M3U8 request for stream: {}", stream_key);
         if !manager.wait_for_stream(stream_key.clone()).await {
@@ -58,6 +60,15 @@ pub async fn serve_hls(
                 .header("Retry-After", "5")
                 .body(Body::from("Stream not available"))
                 .unwrap();
+        }
+
+        // Track viewer for m3u8 requests only
+        if let Some(client_info) = req.extensions().get::<ClientInfo>() {
+            manager.track_viewer(
+                &stream_key,
+                &client_info.ip,
+                client_info.user_agent.as_deref(),
+            );
         }
     }
 
@@ -122,10 +133,13 @@ pub async fn serve_hls(
 pub async fn health_check(manager: Arc<StreamManager>) -> impl IntoResponse {
     let active_count = manager.active_streams.read().await.len();
     let pending_count = manager.pending_streams.read().await.len();
-    let stats = manager.stats.read().await.clone();
-    
+    let mut stats = manager.stats.read().await.clone();
+
+    // Update total viewer count
+    stats.total_viewers = manager.get_total_viewer_count();
+
     let healthy = active_count < manager.max_concurrent_streams;
-    
+
     let response = HealthResponse {
         status: if healthy { "healthy".to_string() } else { "unhealthy".to_string() },
         active_streams: active_count,
@@ -144,27 +158,29 @@ pub async fn health_check(manager: Arc<StreamManager>) -> impl IntoResponse {
 pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
     let active = manager.active_streams.read().await;
     let now = Utc::now();
-    
-    let active_streams: Vec<StreamStatus> = active.iter().map(|(key, info)| {
-        let last_accessed = tokio::runtime::Handle::current()
-            .block_on(info.last_accessed.read());
-        
-        StreamStatus {
+
+    let mut active_streams = Vec::new();
+    for (key, info) in active.iter() {
+        let last_accessed = info.last_accessed.read().await;
+
+        active_streams.push(StreamStatus {
             key: key.clone(),
             pid: info.pid,
             uptime: now.signed_duration_since(info.started_at).num_seconds(),
             last_accessed: now.signed_duration_since(*last_accessed).num_seconds(),
-        }
-    }).collect();
-    
+            viewers: manager.get_stream_viewer_count(key),
+        });
+    }
+
     let pending_streams: Vec<String> = manager.pending_streams.read().await
         .keys().cloned().collect();
-    
+
     let failed_streams: Vec<String> = manager.failed_streams.read().await
         .keys().cloned().collect();
-    
-    let stats = manager.stats.read().await.clone();
-    
+
+    let mut stats = manager.stats.read().await.clone();
+    stats.total_viewers = manager.get_total_viewer_count();
+
     Json(StatusResponse {
         active_streams,
         pending_streams,

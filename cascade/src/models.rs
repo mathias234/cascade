@@ -20,6 +20,7 @@ pub struct StreamStatus {
     pub pid: u32,
     pub uptime: i64,
     pub last_accessed: i64,
+    pub viewers: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,6 +29,7 @@ pub struct Stats {
     pub stopped: usize,
     pub failed: usize,
     pub requests: usize,
+    pub total_viewers: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

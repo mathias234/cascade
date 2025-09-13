@@ -2,10 +2,14 @@ mod cache;
 mod handlers;
 mod manager;
 mod models;
+mod viewers;
 
 use anyhow::Result;
 use axum::{
+    extract::Request,
     http::{header, Method},
+    middleware::{self, Next},
+    response::Response,
     routing::get,
     Router,
 };
@@ -19,6 +23,40 @@ use tower_http::{
     timeout::TimeoutLayer,
 };
 use tracing::info;
+
+#[derive(Clone)]
+pub struct ClientInfo {
+    pub ip: String,
+    pub user_agent: Option<String>,
+}
+
+async fn extract_client_info(mut req: Request, next: Next) -> Response {
+    // Extract IP from X-Forwarded-For header or connection info
+    let ip = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next()) // Take first IP if multiple
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            req.extensions()
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|connect_info| connect_info.0.ip().to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Extract User-Agent
+    let user_agent = req
+        .headers()
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let client_info = ClientInfo { ip, user_agent };
+    req.extensions_mut().insert(client_info);
+
+    next.run(req).await
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,7 +92,7 @@ async fn main() -> Result<()> {
         // HLS file serving route - handles both .m3u8 and .ts files
         .route("/live/{file_name}", get({
             let manager = manager.clone();
-            move |path| handlers::serve_hls(path, manager.clone())
+            move |path, req| handlers::serve_hls(path, req, manager.clone())
         }))
         .route("/health", get({
             let manager = manager.clone();
@@ -64,6 +102,7 @@ async fn main() -> Result<()> {
             let manager = manager.clone();
             move || handlers::status(manager.clone())
         }))
+        .layer(middleware::from_fn(extract_client_info))
         .layer(middleware);
 
     let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());

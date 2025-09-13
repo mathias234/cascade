@@ -1,5 +1,6 @@
 use crate::cache::SegmentCache;
 use crate::models::{Stats, StreamInfo};
+use crate::viewers::ViewerTracker;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::{
@@ -30,6 +31,7 @@ pub struct StreamManager {
     pub failed_streams: Arc<RwLock<HashMap<String, DateTime<Utc>>>>,
     pub stats: Arc<RwLock<Stats>>,
     pub cache: Arc<SegmentCache>,
+    pub viewer_tracker: Arc<ViewerTracker>,
 }
 
 impl StreamManager {
@@ -88,8 +90,10 @@ impl StreamManager {
                 stopped: 0,
                 failed: 0,
                 requests: 0,
+                total_viewers: 0,
             })),
             cache: Arc::new(SegmentCache::new(cache_entries, max_segment_size)),
+            viewer_tracker: Arc::new(ViewerTracker::new()),
         })
     }
 
@@ -174,8 +178,8 @@ impl StreamManager {
             .arg("-loglevel").arg("warning")
             .arg("-i").arg(&rtmp_url)
             .arg("-c").arg("copy")
-        .arg("-f").arg("hls")
-        .arg("-hls_time").arg("5")
+            .arg("-f").arg("hls")
+            .arg("-hls_time").arg("5")
             .arg("-hls_list_size").arg("20")
             .arg("-hls_flags").arg("delete_segments+append_list")
             .arg("-hls_segment_filename").arg(segment_path.to_str().unwrap())
@@ -260,7 +264,10 @@ impl StreamManager {
 
         // Invalidate cache entries for this stream
         self.cache.invalidate_stream(stream_key).await;
-        
+
+        // Clear viewers for this stream
+        self.viewer_tracker.clear_stream_viewers(stream_key);
+
         self.cleanup_stream_files(stream_key).await?;
         Ok(())
     }
@@ -366,17 +373,17 @@ impl StreamManager {
 
         loop {
             interval.tick().await;
-            
+
             let mut streams_to_stop = Vec::new();
-            
+
             {
                 let active = self.active_streams.read().await;
                 info!("Checking {} active streams for health", active.len());
-                
+
                 for (stream_key, stream_info) in active.iter() {
                     let last_accessed = stream_info.last_accessed.read().await;
                     let idle_duration = Utc::now().signed_duration_since(*last_accessed);
-                    
+
                     if idle_duration.num_seconds() > self.stream_timeout.as_secs() as i64 {
                         streams_to_stop.push(stream_key.clone());
                     }
@@ -397,6 +404,9 @@ impl StreamManager {
                     now.signed_duration_since(*time).num_seconds() < 300
                 });
             }
+
+            // Clean up inactive viewers
+            self.viewer_tracker.cleanup_inactive_viewers();
         }
     }
 
@@ -407,6 +417,18 @@ impl StreamManager {
             *last_accessed = Utc::now();
             debug!("Updated access time for stream {}", stream_key);
         }
+    }
+
+    pub fn track_viewer(&self, stream_key: &str, ip: &str, user_agent: Option<&str>) {
+        self.viewer_tracker.track_viewer(stream_key, ip, user_agent);
+    }
+
+    pub fn get_stream_viewer_count(&self, stream_key: &str) -> usize {
+        self.viewer_tracker.get_viewer_count(stream_key)
+    }
+
+    pub fn get_total_viewer_count(&self) -> usize {
+        self.viewer_tracker.get_total_viewer_count()
     }
 
     pub async fn graceful_shutdown(&self) {
