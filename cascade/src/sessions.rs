@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use rand::Rng;
 use serde::Serialize;
-use std::{env, sync::Arc, time::Duration};
+use std::{env, time::Duration};
 use tracing::{debug, info};
 
 #[derive(Debug, Clone, Serialize)]
@@ -16,9 +16,9 @@ pub struct ViewerSession {
 
 pub struct SessionManager {
     // Map: session_id -> ViewerSession
-    sessions: Arc<DashMap<String, ViewerSession>>,
+    sessions: DashMap<String, ViewerSession>,
     // Map: stream_key -> Set of session_ids
-    stream_sessions: Arc<DashMap<String, Arc<DashMap<String, ()>>>>,
+    stream_sessions: DashMap<String, DashMap<String, ()>>,
     session_timeout: Duration,
     tracking_enabled: bool,
 }
@@ -44,8 +44,8 @@ impl SessionManager {
         );
 
         Self {
-            sessions: Arc::new(DashMap::new()),
-            stream_sessions: Arc::new(DashMap::new()),
+            sessions: DashMap::new(),
+            stream_sessions: DashMap::new(),
             session_timeout,
             tracking_enabled,
         }
@@ -86,7 +86,7 @@ impl SessionManager {
         // Add to stream-specific tracking
         let stream_sessions = self.stream_sessions
             .entry(stream_key.to_string())
-            .or_insert_with(|| Arc::new(DashMap::new()));
+            .or_insert_with(|| DashMap::new());
         stream_sessions.insert(session_id.clone(), ());
 
         debug!("Created new session {} for stream {}", session_id, stream_key);
