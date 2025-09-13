@@ -1,5 +1,6 @@
 use crate::cache::SegmentCache;
 use crate::models::{Stats, StreamInfo};
+use crate::sessions::SessionManager;
 use crate::viewers::ViewerTracker;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -32,6 +33,7 @@ pub struct StreamManager {
     pub stats: Arc<RwLock<Stats>>,
     pub cache: Arc<SegmentCache>,
     pub viewer_tracker: Arc<ViewerTracker>,
+    pub session_manager: Arc<SessionManager>,
 }
 
 impl StreamManager {
@@ -94,6 +96,7 @@ impl StreamManager {
             })),
             cache: Arc::new(SegmentCache::new(cache_entries, max_segment_size)),
             viewer_tracker: Arc::new(ViewerTracker::new()),
+            session_manager: Arc::new(SessionManager::new()),
         })
     }
 
@@ -168,10 +171,17 @@ impl StreamManager {
         debug!("Spawning FFmpeg for stream: {}", stream_key);
 
         let rtmp_url = format!("rtmp://{}:{}/live/{}", self.srs_host, self.srs_port, stream_key);
-        let m3u8_path = self.hls_path.join(format!("{}.m3u8", stream_key));
-        let segment_path = self.hls_path.join(format!("{}_%03d.ts", stream_key));
 
+        // Clean up any old files first
         self.cleanup_stream_files(&stream_key).await?;
+
+        // Create stream-specific directory
+        let stream_dir = self.hls_path.join(&stream_key);
+        tokio::fs::create_dir_all(&stream_dir).await.ok();
+
+        // Output paths in subdirectory
+        let m3u8_path = stream_dir.join("index.m3u8");
+        let segment_path = stream_dir.join(format!("{}_%03d.ts", stream_key));
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-nostdin")
@@ -265,36 +275,32 @@ impl StreamManager {
         // Invalidate cache entries for this stream
         self.cache.invalidate_stream(stream_key).await;
 
-        // Clear viewers for this stream
+        // Clear viewers and sessions for this stream
         self.viewer_tracker.clear_stream_viewers(stream_key);
+        self.session_manager.clear_stream_sessions(stream_key);
 
         self.cleanup_stream_files(stream_key).await?;
         Ok(())
     }
 
     async fn cleanup_stream_files(&self, stream_key: &str) -> Result<()> {
-        let mut entries = fs::read_dir(&self.hls_path).await?;
-        
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            if let Some(name) = path.file_name() {
-                if name.to_string_lossy().starts_with(stream_key) {
-                    fs::remove_file(path).await.ok();
-                }
-            }
+        // Remove the stream-specific directory
+        let stream_dir = self.hls_path.join(stream_key);
+        if stream_dir.exists() {
+            fs::remove_dir_all(stream_dir).await.ok();
         }
-        
+
         Ok(())
     }
 
     async fn stream_ready(&self, stream_key: &str) -> bool {
-        let m3u8_path = self.hls_path.join(format!("{}.m3u8", stream_key));
-        
+        let m3u8_path = self.hls_path.join(stream_key).join("index.m3u8");
+
         if let Ok(content) = fs::read_to_string(&m3u8_path).await {
             let segments = content.matches(".ts").count();
             return segments >= 1;
         }
-        
+
         false
     }
 
@@ -405,8 +411,9 @@ impl StreamManager {
                 });
             }
 
-            // Clean up inactive viewers
+            // Clean up inactive viewers and sessions
             self.viewer_tracker.cleanup_inactive_viewers();
+            self.session_manager.cleanup_expired_sessions();
         }
     }
 

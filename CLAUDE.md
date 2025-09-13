@@ -65,16 +65,18 @@ docker-compose logs -f cascade
      - Atomic load-or-compute prevents duplicate disk reads
    - Cache statistics tracking (hits/misses/memory usage)
 
-4. **Viewer Tracking** (`cascade/src/viewers.rs`):
-   - Real-time viewer counting per stream
+4. **Viewer Tracking** (`cascade/src/sessions.rs`):
+   - Privacy-first session-based viewer counting
+   - No storage of IP addresses or User-Agents
+   - Random session IDs via HLS context parameters
    - DashMap-based storage for lock-free concurrent access
-   - Viewer identification via SHA-256 hash of IP + User-Agent
-   - Automatic cleanup of inactive viewers (30s timeout)
-   - Privacy-focused: only stores hashes, no raw PII
+   - Automatic cleanup of expired sessions (30s timeout)
 
 ### Key Endpoints
 
-- `GET /live/{stream_key}/{file}` - Serves HLS content (m3u8/ts files)
+- `GET /live/{stream_key}.m3u8` - Master playlist that redirects with session context
+- `GET /live/{stream_key}/index.m3u8?hls_ctx={session}` - Actual playlist with viewer tracking
+- `GET /live/{stream_key}/{segment}.ts` - Video segment files
 - `GET /health` - Health check with stream capacity info and total viewer count
 - `GET /status` - Detailed status of all streams including viewer counts per stream
 
@@ -115,8 +117,9 @@ The system spawns FFmpeg processes with:
 
 ### Viewer Tracking Implementation
 
-- **Identification**: SHA-256 hash of IP + User-Agent for privacy
+- **Session-based**: Each viewer gets a unique random session ID via HLS context parameter
+- **Privacy-first**: No IP addresses or User-Agents stored anywhere
+- **Master playlist redirect**: Initial request generates session and redirects to actual playlist
 - **Storage**: DashMap for lock-free concurrent access (no global locks)
-- **Tracking**: Only on m3u8 requests to avoid overcounting from segment requests
-- **Cleanup**: Automatic removal of inactive viewers after timeout
+- **Cleanup**: Automatic removal of expired sessions after timeout
 - **API Integration**: Viewer counts exposed in `/health` and `/status` endpoints

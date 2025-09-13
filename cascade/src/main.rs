@@ -2,6 +2,7 @@ mod cache;
 mod handlers;
 mod manager;
 mod models;
+mod sessions;
 mod viewers;
 
 use anyhow::Result;
@@ -89,10 +90,10 @@ async fn main() -> Result<()> {
         );
 
     let app = Router::new()
-        // HLS file serving route - handles both .m3u8 and .ts files
-        .route("/live/{file_name}", get({
+        // Combined route for all HLS files - we'll parse the path in the handler
+        .route("/live/{*path}", get({
             let manager = manager.clone();
-            move |path, req| handlers::serve_hls(path, req, manager.clone())
+            move |path, query, req| handlers::serve_hls_content(path, query, req, manager.clone())
         }))
         .route("/health", get({
             let manager = manager.clone();
