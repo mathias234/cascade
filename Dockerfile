@@ -20,8 +20,9 @@ RUN cargo chef cook --release --recipe-path recipe.json
 # Copy the actual source code and build the application
 COPY cascade ./
 
-# Build the release binary
-RUN cargo build --release
+# Build the release binary (with SSL feature if supported)
+# Try to build with SSL feature first, fall back to without if it fails
+RUN cargo build --release --features ssl || cargo build --release
 
 # Runtime stage
 FROM alpine:3.20
