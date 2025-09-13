@@ -1,7 +1,6 @@
 use crate::cache::SegmentCache;
 use crate::models::{Stats, StreamInfo};
 use crate::sessions::SessionManager;
-use crate::viewers::ViewerTracker;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::{
@@ -32,7 +31,6 @@ pub struct StreamManager {
     pub failed_streams: Arc<RwLock<HashMap<String, DateTime<Utc>>>>,
     pub stats: Arc<RwLock<Stats>>,
     pub cache: Arc<SegmentCache>,
-    pub viewer_tracker: Arc<ViewerTracker>,
     pub session_manager: Arc<SessionManager>,
 }
 
@@ -95,7 +93,6 @@ impl StreamManager {
                 total_viewers: 0,
             })),
             cache: Arc::new(SegmentCache::new(cache_entries, max_segment_size)),
-            viewer_tracker: Arc::new(ViewerTracker::new()),
             session_manager: Arc::new(SessionManager::new()),
         })
     }
@@ -336,8 +333,7 @@ impl StreamManager {
         // Invalidate cache entries for this stream
         self.cache.invalidate_stream(stream_key).await;
 
-        // Clear viewers and sessions for this stream
-        self.viewer_tracker.clear_stream_viewers(stream_key);
+        // Clear sessions for this stream
         self.session_manager.clear_stream_sessions(stream_key);
 
         self.cleanup_stream_files(stream_key).await?;
@@ -467,7 +463,6 @@ impl StreamManager {
             // No need to clean up failed streams since they're removed on retry
 
             // Clean up inactive viewers and sessions
-            self.viewer_tracker.cleanup_inactive_viewers();
             self.session_manager.cleanup_expired_sessions();
         }
     }
@@ -479,18 +474,6 @@ impl StreamManager {
             *last_accessed = Utc::now();
             debug!("Updated access time for stream {}", stream_key);
         }
-    }
-
-    pub fn track_viewer(&self, stream_key: &str, ip: &str, user_agent: Option<&str>) {
-        self.viewer_tracker.track_viewer(stream_key, ip, user_agent);
-    }
-
-    pub fn get_stream_viewer_count(&self, stream_key: &str) -> usize {
-        self.viewer_tracker.get_viewer_count(stream_key)
-    }
-
-    pub fn get_total_viewer_count(&self) -> usize {
-        self.viewer_tracker.get_total_viewer_count()
     }
 
     pub async fn graceful_shutdown(&self) {

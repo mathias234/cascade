@@ -3,7 +3,6 @@ mod handlers;
 mod manager;
 mod models;
 mod sessions;
-mod viewers;
 
 use anyhow::Result;
 use axum::{
