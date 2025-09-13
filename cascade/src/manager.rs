@@ -153,14 +153,10 @@ impl StreamManager {
             }
         }
 
+        // Remove from failed streams to allow immediate retry
         {
-            let failed = self.failed_streams.read().await;
-            if let Some(fail_time) = failed.get(&stream_key) {
-                if Utc::now().signed_duration_since(*fail_time).num_seconds() < 30 {
-                    warn!("Stream {} recently failed, waiting before retry", stream_key);
-                    return Ok(false);
-                }
-            }
+            let mut failed = self.failed_streams.write().await;
+            failed.remove(&stream_key);
         }
 
         {
@@ -185,7 +181,9 @@ impl StreamManager {
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-nostdin")
+            .arg("-re")
             .arg("-loglevel").arg("warning")
+            .arg("-rw_timeout").arg("2000000") // Read/write timeout
             .arg("-i").arg(&rtmp_url)
             .arg("-c").arg("copy")
             .arg("-f").arg("hls")
@@ -198,9 +196,72 @@ impl StreamManager {
             .stderr(Stdio::piped());
 
         match cmd.spawn() {
-            Ok(child) => {
+            Ok(mut child) => {
                 let pid = child.id().unwrap_or(0);
                 info!("FFmpeg process spawned for {}, PID: {}", stream_key, pid);
+
+                // Spawn a task to read and log FFmpeg stderr
+                let failed_streams_clone = self.failed_streams.clone();
+                let active_streams_clone = self.active_streams.clone();
+                let pending_streams_clone = self.pending_streams.clone();
+                if let Some(stderr) = child.stderr.take() {
+                    let stream_key_clone = stream_key.clone();
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncBufReadExt, BufReader};
+                        let reader = BufReader::new(stderr);
+                        let mut lines = reader.lines();
+
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            debug!("FFmpeg stderr [{}]: {}", stream_key_clone, line);
+
+                            // Check for FFmpeg I/O errors (RTMP source unavailable or disconnected)
+                            if line.contains("Error opening input: I/O error")
+                                || line.contains("Error opening input files: I/O error")
+                                || line.contains("Error during demuxing: I/O error")
+                                || line.contains("Error retrieving a packet from demuxer: I/O error") {
+
+                                error!("FFmpeg I/O error for stream {} (source unavailable or disconnected): {}", stream_key_clone, line);
+
+                                // Remove from pending if still there
+                                {
+                                    let mut pending = pending_streams_clone.write().await;
+                                    pending.remove(&stream_key_clone);
+                                }
+
+                                // Remove from active streams
+                                {
+                                    let mut active = active_streams_clone.write().await;
+                                    if let Some(stream_info) = active.remove(&stream_key_clone) {
+                                        let mut process = stream_info.process.lock().await;
+                                        let _ = process.kill().await;
+                                    }
+                                }
+
+                                // Mark stream as failed
+                                {
+                                    let mut failed = failed_streams_clone.write().await;
+                                    failed.insert(stream_key_clone.clone(), Utc::now());
+                                }
+
+                                break;
+                            }
+                        }
+                    });
+                }
+
+                // Spawn a task to read and log FFmpeg stdout
+                if let Some(stdout) = child.stdout.take() {
+                    let stream_key_clone = stream_key.clone();
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncBufReadExt, BufReader};
+                        let reader = BufReader::new(stdout);
+                        let mut lines = reader.lines();
+
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            debug!("FFmpeg stdout [{}]: {}", stream_key_clone, line);
+                        }
+                    });
+                }
 
                 let stream_info = StreamInfo {
                     pid,
@@ -403,13 +464,7 @@ impl StreamManager {
                 }
             }
 
-            {
-                let mut failed = self.failed_streams.write().await;
-                let now = Utc::now();
-                failed.retain(|_, time| {
-                    now.signed_duration_since(*time).num_seconds() < 300
-                });
-            }
+            // No need to clean up failed streams since they're removed on retry
 
             // Clean up inactive viewers and sessions
             self.viewer_tracker.cleanup_inactive_viewers();

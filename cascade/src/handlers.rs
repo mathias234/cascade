@@ -76,6 +76,19 @@ async fn serve_master_playlist(
 
     // Ensure stream is started
     if !manager.wait_for_stream(stream_key.to_string()).await {
+        // Check if stream failed (RTMP source doesn't exist)
+        {
+            let failed = manager.failed_streams.read().await;
+            if failed.contains_key(stream_key) {
+                info!("Stream {} failed - RTMP source not found", stream_key);
+                return Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Body::from("Stream not found"))
+                    .unwrap();
+            }
+        }
+
+        // Stream couldn't start for other reasons
         return Response::builder()
             .status(StatusCode::SERVICE_UNAVAILABLE)
             .header("Retry-After", "5")
