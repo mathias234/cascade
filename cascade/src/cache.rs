@@ -86,30 +86,35 @@ impl SegmentCache {
         key: &str,
         file_path: &Path,
     ) -> Result<Option<(CachedSegment, bool)>> {
-        // Check if file exists first
-        if !file_path.exists() {
-            debug!("File not found: {:?}", file_path);
-            return Ok(None);
+        // First check if it's already cached
+        if let Some(segment) = self.cache.get(key).await {
+            self.stats.hits.fetch_add(1, Ordering::Relaxed);
+            debug!("Cache HIT: {}", key);
+            return Ok(Some((segment, true)));
         }
 
-        // Check if already cached for stats purposes
-        let was_cached = self.cache.contains_key(key);
-
+        // Not cached, need to load from disk
         // Clone necessary data for the async closure
         let file_path = file_path.to_path_buf();
         let max_file_size = self.max_file_size;
         let stats = Arc::clone(&self.stats);
         let key_string = key.to_string();
 
-        // Use get_with for atomic load-or-compute
+        // Use try_get_with for atomic load-or-compute
         // Moka ensures only one load happens even with concurrent requests
         let result = self
             .cache
             .try_get_with(key_string.clone(), async move {
                 info!("Cache MISS: {} - loading from disk", key_string);
 
-                // Get file metadata
-                let metadata = tokio::fs::metadata(&file_path).await?;
+                // Get file metadata (also checks if file exists)
+                let metadata = match tokio::fs::metadata(&file_path).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        debug!("File not found: {:?} - {}", file_path, e);
+                        return Err(anyhow::anyhow!("File not found"));
+                    }
+                };
                 let file_size = metadata.len() as usize;
 
                 // Validate file size
@@ -142,16 +147,12 @@ impl SegmentCache {
             })
             .await;
 
-        // Update hit/miss stats
-        if was_cached {
-            self.stats.hits.fetch_add(1, Ordering::Relaxed);
-            info!("Cache HIT: {}", key);
-        } else {
-            self.stats.misses.fetch_add(1, Ordering::Relaxed);
-        }
-
+        // We only get here if it was a cache miss (new load)
         match result {
-            Ok(segment) => Ok(Some((segment, was_cached))),
+            Ok(segment) => {
+                self.stats.misses.fetch_add(1, Ordering::Relaxed);
+                Ok(Some((segment, false))) // false = was not cached
+            }
             Err(e) => {
                 error!("Failed to load {}: {}", key, e);
                 Ok(None)

@@ -8,7 +8,7 @@ use std::{
     env,
     path::PathBuf,
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 use tokio::{
@@ -29,7 +29,7 @@ pub struct StreamManager {
     pub active_streams: DashMap<String, StreamInfo>,
     pub pending_streams: DashMap<String, DateTime<Utc>>,
     pub failed_streams: DashMap<String, DateTime<Utc>>,
-    pub stats: Arc<RwLock<Stats>>,
+    pub stats: Arc<Stats>,
     pub cache: SegmentCache,
     pub session_manager: SessionManager,
 }
@@ -85,13 +85,7 @@ impl StreamManager {
             active_streams: DashMap::new(),
             pending_streams: DashMap::new(),
             failed_streams: DashMap::new(),
-            stats: Arc::new(RwLock::new(Stats {
-                started: 0,
-                stopped: 0,
-                failed: 0,
-                requests: 0,
-                total_viewers: 0,
-            })),
+            stats: Arc::new(Stats::new()),
             cache: SegmentCache::new(cache_entries, max_segment_size),
             session_manager: SessionManager::new(),
         })
@@ -169,7 +163,7 @@ impl StreamManager {
             .arg("-i").arg(&rtmp_url)
             .arg("-c").arg("copy")
             .arg("-f").arg("hls")
-            .arg("-hls_time").arg("5")
+            .arg("-hls_time").arg("1")
             .arg("-hls_list_size").arg("20")
             .arg("-hls_flags").arg("delete_segments+append_list")
             .arg("-hls_segment_filename").arg(segment_path.to_str().unwrap())
@@ -247,10 +241,7 @@ impl StreamManager {
 
                 self.pending_streams.remove(&stream_key);
 
-                {
-                    let mut stats = self.stats.write().await;
-                    stats.started += 1;
-                }
+                self.stats.started.fetch_add(1, Ordering::Relaxed);
 
                 Ok(true)
             }
@@ -261,10 +252,7 @@ impl StreamManager {
 
                 self.failed_streams.insert(stream_key, Utc::now());
                 
-                {
-                    let mut stats = self.stats.write().await;
-                    stats.failed += 1;
-                }
+                self.stats.failed.fetch_add(1, Ordering::Relaxed);
                 
                 Ok(false)
             }
@@ -285,10 +273,7 @@ impl StreamManager {
             
             let _ = process.wait().await;
             
-            {
-                let mut stats = self.stats.write().await;
-                stats.stopped += 1;
-            }
+            self.stats.stopped.fetch_add(1, Ordering::Relaxed);
         }
 
         // Invalidate cache entries for this stream

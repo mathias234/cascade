@@ -4,6 +4,9 @@ mod manager;
 mod models;
 mod sessions;
 
+#[cfg(feature = "ssl")]
+mod ssl;
+
 use anyhow::Result;
 use axum::{
     extract::Request,
@@ -104,6 +107,15 @@ async fn main() -> Result<()> {
         }))
         .layer(middleware::from_fn(extract_client_info))
         .layer(middleware);
+
+    #[cfg(feature = "ssl")]
+    {
+        let ssl_config = ssl::SslConfig::from_env()?;
+        if ssl_config.enabled {
+            info!("SSL is enabled, starting TLS server");
+            return ssl::run_tls_server(app, manager, ssl_config).await;
+        }
+    }
 
     let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
     let addr = format!("0.0.0.0:{}", port);
