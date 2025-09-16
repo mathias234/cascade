@@ -52,14 +52,20 @@ impl SegmentCache {
         let stats = Arc::new(CacheStats::new());
         let stats_clone = Arc::clone(&stats);
 
-        let eviction_listener = move |key: Arc<String>, value: CachedSegment, cause: RemovalCause| -> ListenerFuture {
-            debug!("Cache entry evicted: {} (cause: {:?}, size: {} bytes)", key, cause, value.data.len());
+        let eviction_listener =
+            move |key: Arc<String>, value: CachedSegment, cause: RemovalCause| -> ListenerFuture {
+                debug!(
+                    "Cache entry evicted: {} (cause: {:?}, size: {} bytes)",
+                    key,
+                    cause,
+                    value.data.len()
+                );
 
-            let size = value.data.len() as u64;
-            stats_clone.memory_bytes.fetch_sub(size, Ordering::Relaxed);
+                let size = value.data.len() as u64;
+                stats_clone.memory_bytes.fetch_sub(size, Ordering::Relaxed);
 
-            async {}.boxed()
-        };
+                async {}.boxed()
+            };
 
         let cache = Cache::builder()
             .max_capacity(max_entries as u64)
@@ -121,10 +127,7 @@ impl SegmentCache {
                     .memory_bytes
                     .fetch_add(file_size as u64, Ordering::Relaxed);
 
-                let segment = CachedSegment {
-                    data,
-                    content_type,
-                };
+                let segment = CachedSegment { data, content_type };
 
                 Ok(segment)
             })

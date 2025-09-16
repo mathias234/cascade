@@ -161,14 +161,19 @@ async fn serve_actual_playlist(
             let content_size = modified_content.len();
             debug!(
                 "Serving playlist for stream {} ({} bytes)",
-                stream_key,
-                content_size
+                stream_key, content_size
             );
-            
+
             // Track stats
-            manager.stats.playlists_served.fetch_add(1, Ordering::Relaxed);
-            manager.stats.bytes_served.fetch_add(content_size as u64, Ordering::Relaxed);
-            
+            manager
+                .stats
+                .playlists_served
+                .fetch_add(1, Ordering::Relaxed);
+            manager
+                .stats
+                .bytes_served
+                .fetch_add(content_size as u64, Ordering::Relaxed);
+
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
@@ -187,7 +192,11 @@ async fn serve_actual_playlist(
 }
 
 /// Serve segment files
-async fn serve_segment(stream_key: &str, segment: &str, manager: Arc<StreamManager>) -> Response<Body> {
+async fn serve_segment(
+    stream_key: &str,
+    segment: &str,
+    manager: Arc<StreamManager>,
+) -> Response<Body> {
     debug!(
         "Segment request for stream: {}, segment: {}",
         stream_key, segment
@@ -216,11 +225,17 @@ async fn serve_segment(stream_key: &str, segment: &str, manager: Arc<StreamManag
             } else {
                 info!("Cache miss: {} ({} bytes)", segment, data_size);
             }
-            
+
             // Track stats
-            manager.stats.segments_served.fetch_add(1, Ordering::Relaxed);
-            manager.stats.bytes_served.fetch_add(data_size as u64, Ordering::Relaxed);
-            
+            manager
+                .stats
+                .segments_served
+                .fetch_add(1, Ordering::Relaxed);
+            manager
+                .stats
+                .bytes_served
+                .fetch_add(data_size as u64, Ordering::Relaxed);
+
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, cached_segment.content_type)
@@ -252,7 +267,7 @@ pub async fn health_check(manager: Arc<StreamManager>) -> impl IntoResponse {
     // Get stats snapshot and update viewer count
     manager.stats.total_viewers.store(
         manager.session_manager.get_total_viewer_count() as u64,
-        Ordering::Relaxed
+        Ordering::Relaxed,
     );
     let stats = manager.stats.to_snapshot();
 
@@ -309,13 +324,15 @@ pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
 
     manager.stats.total_viewers.store(
         manager.session_manager.get_total_viewer_count() as u64,
-        Ordering::Relaxed
+        Ordering::Relaxed,
     );
     let stats = manager.stats.to_snapshot();
-    
+
     let cache_stats = Some(manager.cache.stats().await);
-    let uptime_seconds = now.signed_duration_since(manager.server_started_at).num_seconds();
-    
+    let uptime_seconds = now
+        .signed_duration_since(manager.server_started_at)
+        .num_seconds();
+
     // Get throughput and metrics history
     let throughput = manager.metrics_history.get_current_throughput().await;
     let metrics_history = manager.metrics_history.get_history().await;
@@ -335,11 +352,11 @@ pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
 pub async fn dashboard() -> impl IntoResponse {
     // Try multiple paths to support both local development and Docker
     let paths = [
-        "dashboard.html",           // Local development (relative to where cargo run is executed)
-        "/dashboard.html",          // Docker container root
-        "cascade/dashboard.html",   // Alternative local path
+        "dashboard.html",  // Local development (relative to where cargo run is executed)
+        "/dashboard.html", // Docker container root
+        "cascade/dashboard.html", // Alternative local path
     ];
-    
+
     for path in &paths {
         match tokio::fs::read_to_string(path).await {
             Ok(html) => {
@@ -349,11 +366,7 @@ pub async fn dashboard() -> impl IntoResponse {
             Err(_) => continue,
         }
     }
-    
-    error!("Failed to read dashboard.html from any known location");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "Dashboard not available"
-    ).into_response()
-}
 
+    error!("Failed to read dashboard.html from any known location");
+    (StatusCode::INTERNAL_SERVER_ERROR, "Dashboard not available").into_response()
+}

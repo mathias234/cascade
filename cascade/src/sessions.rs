@@ -39,7 +39,11 @@ impl SessionManager {
 
         info!(
             "Session tracking: {} (timeout: {:?})",
-            if tracking_enabled { "enabled" } else { "disabled" },
+            if tracking_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
             session_timeout
         );
 
@@ -77,12 +81,16 @@ impl SessionManager {
         self.sessions.insert(session_id.clone(), session.clone());
 
         // Add to stream-specific tracking
-        let stream_sessions = self.stream_sessions
+        let stream_sessions = self
+            .stream_sessions
             .entry(stream_key.to_string())
             .or_default();
         stream_sessions.insert(session_id.clone(), ());
 
-        debug!("Created new session {} for stream {}", session_id, stream_key);
+        debug!(
+            "Created new session {} for stream {}",
+            session_id, stream_key
+        );
         session_id
     }
 
@@ -140,28 +148,28 @@ impl SessionManager {
             })
             .count()
     }
-    
+
     /// Get viewer counts for all streams
     pub fn get_all_stream_viewers(&self) -> std::collections::HashMap<String, usize> {
         use std::collections::HashMap;
-        
+
         if !self.tracking_enabled {
             return HashMap::new();
         }
-        
+
         let now = Utc::now();
         let mut stream_counts = HashMap::new();
-        
+
         for entry in self.sessions.iter() {
             let session = entry.value();
             let idle_duration = now.signed_duration_since(session.last_seen);
-            
+
             // Only count active sessions
             if idle_duration.num_seconds() <= self.session_timeout.as_secs() as i64 {
                 *stream_counts.entry(session.stream_key.clone()).or_insert(0) += 1;
             }
         }
-        
+
         stream_counts
     }
 
@@ -175,7 +183,8 @@ impl SessionManager {
         let mut removed_count = 0;
 
         // Collect expired session IDs
-        let expired_sessions: Vec<(String, String)> = self.sessions
+        let expired_sessions: Vec<(String, String)> = self
+            .sessions
             .iter()
             .filter_map(|entry| {
                 let session = entry.value();
@@ -202,7 +211,8 @@ impl SessionManager {
         }
 
         // Clean up empty stream entries
-        self.stream_sessions.retain(|_, sessions| !sessions.is_empty());
+        self.stream_sessions
+            .retain(|_, sessions| !sessions.is_empty());
 
         if removed_count > 0 {
             debug!("Cleaned up {} expired sessions", removed_count);

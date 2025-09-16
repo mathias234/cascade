@@ -42,24 +42,24 @@ impl StreamManager {
         let srs_host = env::var("SOURCE_HOST").unwrap_or_else(|_| "rtmp.example.com".to_string());
         let srs_port = env::var("SOURCE_PORT").unwrap_or_else(|_| "1935".to_string());
         let hls_path = PathBuf::from(env::var("HLS_PATH").unwrap_or_else(|_| "./hls".to_string()));
-        
+
         let stream_timeout = Duration::from_secs(
             env::var("STREAM_TIMEOUT")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(30)
+                .unwrap_or(30),
         );
-        
+
         let max_concurrent_streams = env::var("MAX_CONCURRENT_STREAMS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(50);
-            
+
         let stream_start_timeout = Duration::from_secs(
             env::var("STREAM_START_TIMEOUT")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(15)
+                .unwrap_or(15),
         );
 
         info!("Stream Manager starting...");
@@ -105,17 +105,18 @@ impl StreamManager {
     async fn cleanup_all_streams(&self) -> Result<()> {
         info!("Cleaning up HLS directory...");
         let mut count = 0;
-        
+
         let mut entries = fs::read_dir(&self.hls_path).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if let Some(ext) = path.extension()
-                && (ext == "m3u8" || ext == "ts") {
-                    fs::remove_file(path).await.ok();
-                    count += 1;
-                }
+                && (ext == "m3u8" || ext == "ts")
+            {
+                fs::remove_file(path).await.ok();
+                count += 1;
+            }
         }
-        
+
         if count > 0 {
             info!("Cleaned up {} files from previous runs", count);
         }
@@ -134,8 +135,10 @@ impl StreamManager {
         }
 
         if self.active_streams.len() >= self.max_concurrent_streams {
-            warn!("Max concurrent streams ({}) reached, cannot start {}",
-                self.max_concurrent_streams, stream_key);
+            warn!(
+                "Max concurrent streams ({}) reached, cannot start {}",
+                self.max_concurrent_streams, stream_key
+            );
             return Ok(false);
         }
 
@@ -146,7 +149,10 @@ impl StreamManager {
 
         debug!("Spawning FFmpeg for stream: {}", stream_key);
 
-        let rtmp_url = format!("rtmp://{}:{}/live/{}", self.srs_host, self.srs_port, stream_key);
+        let rtmp_url = format!(
+            "rtmp://{}:{}/live/{}",
+            self.srs_host, self.srs_port, stream_key
+        );
 
         // Clean up any old files first
         self.cleanup_stream_files(&stream_key).await?;
@@ -162,15 +168,24 @@ impl StreamManager {
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-nostdin")
             .arg("-re")
-            .arg("-loglevel").arg("warning")
-            .arg("-rw_timeout").arg("500000") // Read/write timeout
-            .arg("-i").arg(&rtmp_url)
-            .arg("-c").arg("copy")
-            .arg("-f").arg("hls")
-            .arg("-hls_time").arg("1")
-            .arg("-hls_list_size").arg("20")
-            .arg("-hls_flags").arg("delete_segments+append_list")
-            .arg("-hls_segment_filename").arg(segment_path.to_str().unwrap())
+            .arg("-loglevel")
+            .arg("warning")
+            .arg("-rw_timeout")
+            .arg("500000") // Read/write timeout
+            .arg("-i")
+            .arg(&rtmp_url)
+            .arg("-c")
+            .arg("copy")
+            .arg("-f")
+            .arg("hls")
+            .arg("-hls_time")
+            .arg("1")
+            .arg("-hls_list_size")
+            .arg("20")
+            .arg("-hls_flags")
+            .arg("delete_segments+append_list")
+            .arg("-hls_segment_filename")
+            .arg(segment_path.to_str().unwrap())
             .arg(m3u8_path.to_str().unwrap())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -198,15 +213,21 @@ impl StreamManager {
                             if line.contains("Error opening input: I/O error")
                                 || line.contains("Error opening input files: I/O error")
                                 || line.contains("Error during demuxing: I/O error")
-                                || line.contains("Error retrieving a packet from demuxer: I/O error") {
-
-                                error!("FFmpeg I/O error for stream {} (source unavailable or disconnected): {}", stream_key_clone, line);
+                                || line
+                                    .contains("Error retrieving a packet from demuxer: I/O error")
+                            {
+                                error!(
+                                    "FFmpeg I/O error for stream {} (source unavailable or disconnected): {}",
+                                    stream_key_clone, line
+                                );
 
                                 // Remove from pending if still there
                                 pending_streams_clone.remove(&stream_key_clone);
 
                                 // Remove from active streams
-                                if let Some((_, stream_info)) = active_streams_clone.remove(&stream_key_clone) {
+                                if let Some((_, stream_info)) =
+                                    active_streams_clone.remove(&stream_key_clone)
+                                {
                                     let mut process = stream_info.process.lock().await;
                                     let _ = process.kill().await;
                                 }
@@ -251,13 +272,13 @@ impl StreamManager {
             }
             Err(e) => {
                 error!("Failed to start stream {}: {}", stream_key, e);
-                
+
                 self.pending_streams.remove(&stream_key);
 
                 self.failed_streams.insert(stream_key, Utc::now());
-                
+
                 self.stats.failed.fetch_add(1, Ordering::Relaxed);
-                
+
                 Ok(false)
             }
         }
@@ -270,13 +291,13 @@ impl StreamManager {
 
         if let Some(info) = stream_info {
             let mut process = info.process.lock().await;
-            
+
             if let Err(e) = process.kill().await {
                 error!("Error killing stream {}: {}", stream_key, e);
             }
-            
+
             let _ = process.wait().await;
-            
+
             self.stats.stopped.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -323,7 +344,8 @@ impl StreamManager {
         }
 
         // Try to start the stream if it's not already starting
-        let need_to_start = !self.pending_streams.contains_key(&stream_key) && !self.active_streams.contains_key(&stream_key);
+        let need_to_start = !self.pending_streams.contains_key(&stream_key)
+            && !self.active_streams.contains_key(&stream_key);
 
         if need_to_start {
             info!("Starting stream: {}", stream_key);
@@ -331,7 +353,10 @@ impl StreamManager {
                 return false;
             }
         } else {
-            debug!("Stream {} is already starting or active, waiting for it to be ready", stream_key);
+            debug!(
+                "Stream {} is already starting or active, waiting for it to be ready",
+                stream_key
+            );
         }
 
         // Wait for stream to become ready (regardless of who started it)
@@ -344,7 +369,11 @@ impl StreamManager {
                     let mut last_accessed = stream.last_accessed.write().await;
                     *last_accessed = Utc::now();
                 }
-                info!("Stream {} became ready after {:?}", stream_key, start.elapsed());
+                info!(
+                    "Stream {} became ready after {:?}",
+                    stream_key,
+                    start.elapsed()
+                );
                 return true;
             }
 
@@ -356,11 +385,14 @@ impl StreamManager {
             time::sleep(check_interval).await;
             check_interval = std::cmp::min(
                 Duration::from_millis((check_interval.as_millis() as f64 * 1.2) as u64),
-                Duration::from_secs(1)
+                Duration::from_secs(1),
             );
         }
 
-        warn!("Timeout waiting for stream {} after {:?}", stream_key, self.stream_start_timeout);
+        warn!(
+            "Timeout waiting for stream {} after {:?}",
+            stream_key, self.stream_start_timeout
+        );
         false
     }
 
@@ -373,7 +405,10 @@ impl StreamManager {
 
             let mut streams_to_stop = Vec::new();
 
-            info!("Checking {} active streams for health", self.active_streams.len());
+            info!(
+                "Checking {} active streams for health",
+                self.active_streams.len()
+            );
 
             for entry in self.active_streams.iter() {
                 let stream_key = entry.key();
@@ -387,7 +422,10 @@ impl StreamManager {
             }
 
             for stream_key in streams_to_stop {
-                info!("Stream {} idle for more than {:?}, stopping", stream_key, self.stream_timeout);
+                info!(
+                    "Stream {} idle for more than {:?}, stopping",
+                    stream_key, self.stream_timeout
+                );
                 if let Err(e) = self.stop_stream(&stream_key).await {
                     error!("Error stopping idle stream {}: {}", stream_key, e);
                 }
@@ -410,16 +448,21 @@ impl StreamManager {
 
     pub async fn graceful_shutdown(&self) {
         info!("Starting graceful shutdown...");
-        
+
         self.pending_streams.clear();
 
-        let active_keys: Vec<String> = self.active_streams.iter()
+        let active_keys: Vec<String> = self
+            .active_streams
+            .iter()
             .map(|entry| entry.key().clone())
             .collect();
 
         for stream_key in active_keys {
             if let Err(e) = self.stop_stream(&stream_key).await {
-                error!("Error stopping stream {} during shutdown: {}", stream_key, e);
+                error!(
+                    "Error stopping stream {} during shutdown: {}",
+                    stream_key, e
+                );
             }
         }
 

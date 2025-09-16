@@ -2,7 +2,10 @@ use crate::cache::CacheStatsSnapshot;
 use crate::metrics::{MetricPoint, ThroughputMetrics};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use tokio::{
     process::Child,
     sync::{Mutex, RwLock},

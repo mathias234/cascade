@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use rustls::ServerConfig;
-use rustls_acme::{caches::DirCache, AcmeConfig};
+use rustls_acme::{AcmeConfig, caches::DirCache};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::fs;
@@ -9,7 +9,9 @@ use tracing::{error, info, warn};
 
 use super::config::SslConfig;
 
-pub async fn create_acme_components(config: &SslConfig) -> Result<(rustls_acme::axum::AxumAcceptor, Arc<ServerConfig>)> {
+pub async fn create_acme_components(
+    config: &SslConfig,
+) -> Result<(rustls_acme::axum::AxumAcceptor, Arc<ServerConfig>)> {
     ensure_cert_cache_dir(&config.cert_cache_dir).await?;
 
     let mut acme_config = AcmeConfig::new(&config.domains)
@@ -71,7 +73,10 @@ async fn ensure_cert_cache_dir(path: &Path) -> Result<()> {
         .with_context(|| format!("Failed to read metadata for: {:?}", path))?;
 
     if !metadata.is_dir() {
-        anyhow::bail!("Certificate cache path exists but is not a directory: {:?}", path);
+        anyhow::bail!(
+            "Certificate cache path exists but is not a directory: {:?}",
+            path
+        );
     }
 
     Ok(())

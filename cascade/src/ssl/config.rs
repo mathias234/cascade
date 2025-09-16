@@ -32,8 +32,8 @@ impl SslConfig {
             });
         }
 
-        let domains_str = env::var("SSL_DOMAINS")
-            .context("SSL_DOMAINS must be set when SSL is enabled")?;
+        let domains_str =
+            env::var("SSL_DOMAINS").context("SSL_DOMAINS must be set when SSL is enabled")?;
         let domains: Vec<String> = domains_str
             .split(',')
             .map(|s| s.trim().to_string())
@@ -44,8 +44,7 @@ impl SslConfig {
             anyhow::bail!("SSL_DOMAINS must contain at least one domain");
         }
 
-        let email = env::var("SSL_EMAIL")
-            .context("SSL_EMAIL must be set when SSL is enabled")?;
+        let email = env::var("SSL_EMAIL").context("SSL_EMAIL must be set when SSL is enabled")?;
 
         if !email.contains('@') {
             anyhow::bail!("SSL_EMAIL must be a valid email address");
