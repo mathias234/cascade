@@ -227,23 +227,4 @@ impl SessionManager {
             }
         }
     }
-
-    /// Check if a session exists and is valid
-    pub fn validate_session(&self, session_id: &str) -> Option<String> {
-        if !self.tracking_enabled {
-            return None;
-        }
-
-        if let Some(session) = self.sessions.get(session_id) {
-            let now = Utc::now();
-            let idle_duration = now.signed_duration_since(session.last_seen);
-            if idle_duration.num_seconds() <= self.session_timeout.as_secs() as i64 {
-                Some(session.stream_key.clone())
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
 }
