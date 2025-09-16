@@ -214,7 +214,7 @@ async fn serve_segment(stream_key: &str, segment: &str, manager: Arc<StreamManag
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, cached_segment.content_type)
                 .header(header::CACHE_CONTROL, "max-age=10")
-                .body(Body::from(cached_segment.data.to_bytes()))
+                .body(Body::from(cached_segment.data))
                 .unwrap()
         }
         Ok(None) => {

@@ -12,27 +12,8 @@ use std::{
 use tracing::{debug, error, info};
 
 #[derive(Clone)]
-pub enum SegmentData {
-    Memory(Bytes),
-}
-
-impl SegmentData {
-    pub fn to_bytes(&self) -> Bytes {
-        match self {
-            SegmentData::Memory(bytes) => bytes.clone(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-            SegmentData::Memory(bytes) => bytes.len(),
-        }
-    }
-}
-
-#[derive(Clone)]
 pub struct CachedSegment {
-    pub data: SegmentData,
+    pub data: Vec<u8>,
     pub content_type: &'static str,
 }
 
@@ -136,7 +117,7 @@ impl SegmentCache {
                     .fetch_add(file_size as u64, Ordering::Relaxed);
 
                 let segment = CachedSegment {
-                    data: SegmentData::Memory(Bytes::from(data)),
+                    data: data,
                     content_type,
                 };
 
@@ -179,13 +160,9 @@ impl SegmentCache {
                 count_clone.fetch_add(1, Ordering::Relaxed);
 
                 // Update memory stats based on what we're removing
-                match &segment.data {
-                    SegmentData::Memory(bytes) => {
-                        let size = bytes.len() as u64;
-                        memory_clone.fetch_add(size, Ordering::Relaxed);
-                        stats.memory_bytes.fetch_sub(size, Ordering::Relaxed);
-                    }
-                }
+                let size = segment.data.len() as u64;
+                memory_clone.fetch_add(size, Ordering::Relaxed);
+                stats.memory_bytes.fetch_sub(size, Ordering::Relaxed);
 
                 true // Invalidate this entry
             } else {
