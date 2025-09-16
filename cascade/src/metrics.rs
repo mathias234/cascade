@@ -45,6 +45,7 @@ impl MetricsHistory {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_point(
         &self,
         current_bytes: u64,

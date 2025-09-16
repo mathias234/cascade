@@ -79,7 +79,7 @@ impl SessionManager {
         // Add to stream-specific tracking
         let stream_sessions = self.stream_sessions
             .entry(stream_key.to_string())
-            .or_insert_with(DashMap::new);
+            .or_default();
         stream_sessions.insert(session_id.clone(), ());
 
         debug!("Created new session {} for stream {}", session_id, stream_key);
