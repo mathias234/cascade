@@ -39,6 +39,9 @@ RUN mkdir -p /var/www/hls /var/log/supervisor
 # Copy the compiled binary from builder
 COPY --from=builder /app/target/release/cascade /cascade
 
+# Copy dashboard HTML file
+COPY cascade/dashboard.html /dashboard.html
+
 # Make it executable
 RUN chmod +x /cascade
 

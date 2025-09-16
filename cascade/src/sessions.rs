@@ -147,6 +147,30 @@ impl SessionManager {
             })
             .count()
     }
+    
+    /// Get viewer counts for all streams
+    pub fn get_all_stream_viewers(&self) -> std::collections::HashMap<String, usize> {
+        use std::collections::HashMap;
+        
+        if !self.tracking_enabled {
+            return HashMap::new();
+        }
+        
+        let now = Utc::now();
+        let mut stream_counts = HashMap::new();
+        
+        for entry in self.sessions.iter() {
+            let session = entry.value();
+            let idle_duration = now.signed_duration_since(session.last_seen);
+            
+            // Only count active sessions
+            if idle_duration.num_seconds() <= self.session_timeout.as_secs() as i64 {
+                *stream_counts.entry(session.stream_key.clone()).or_insert(0) += 1;
+            }
+        }
+        
+        stream_counts
+    }
 
     /// Clean up expired sessions
     pub fn cleanup_expired_sessions(&self) {

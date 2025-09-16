@@ -1,6 +1,7 @@
 mod cache;
 mod handlers;
 mod manager;
+mod metrics;
 mod models;
 mod sessions;
 
@@ -17,7 +18,7 @@ use axum::{
     Router,
 };
 use manager::StreamManager;
-use std::{env, sync::Arc, time::Duration};
+use std::{env, sync::{Arc, atomic::Ordering}, time::Duration};
 use tokio::signal;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -77,6 +78,42 @@ async fn main() -> Result<()> {
     let manager_cleanup = manager.clone();
     tokio::spawn(async move {
         manager_cleanup.cleanup_idle_streams().await;
+    });
+    
+    // Start metrics collection task
+    let manager_metrics = manager.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        loop {
+            interval.tick().await;
+            
+            // Get current stats
+            let bytes = manager_metrics.stats.bytes_served.load(Ordering::Relaxed);
+            let requests = manager_metrics.stats.requests.load(Ordering::Relaxed);
+            let segments = manager_metrics.stats.segments_served.load(Ordering::Relaxed);
+            let viewers = manager_metrics.session_manager.get_total_viewer_count();
+            let active_streams = manager_metrics.active_streams.len();
+            
+            // Get cache stats
+            let cache_stats = manager_metrics.cache.stats().await;
+            
+            // Get per-stream viewer counts
+            let stream_viewers = manager_metrics.session_manager.get_all_stream_viewers();
+            
+            // Record metrics point
+            manager_metrics.metrics_history.record_point(
+                bytes,
+                requests,
+                segments,
+                viewers,
+                active_streams,
+                cache_stats.hits,
+                cache_stats.misses,
+                cache_stats.memory_bytes,
+                cache_stats.total_entries,
+                stream_viewers,
+            ).await;
+        }
     });
 
     // Performance optimization layers

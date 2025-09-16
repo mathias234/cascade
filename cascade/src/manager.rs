@@ -1,4 +1,5 @@
 use crate::cache::SegmentCache;
+use crate::metrics::MetricsHistory;
 use crate::models::{Stats, StreamInfo};
 use crate::sessions::SessionManager;
 use anyhow::Result;
@@ -33,6 +34,7 @@ pub struct StreamManager {
     pub cache: SegmentCache,
     pub session_manager: SessionManager,
     pub server_started_at: DateTime<Utc>,
+    pub metrics_history: MetricsHistory,
 }
 
 impl StreamManager {
@@ -90,6 +92,7 @@ impl StreamManager {
             cache: SegmentCache::new(cache_entries, max_segment_size),
             session_manager: SessionManager::new(),
             server_started_at: Utc::now(),
+            metrics_history: MetricsHistory::new(),
         })
     }
 

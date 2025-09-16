@@ -27,7 +27,7 @@ services:
       - SSL_PORT=${SSL_PORT:-443}
       - HTTP_REDIRECT=${HTTP_REDIRECT:-true}
     ports:
-      - "80:80"
+      - "80:8080"
       - "443:443"
     networks:
       - streaming

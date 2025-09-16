@@ -1,4 +1,5 @@
 use crate::cache::CacheStatsSnapshot;
+use crate::metrics::{MetricPoint, ThroughputMetrics};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
@@ -30,6 +31,9 @@ pub struct Stats {
     pub failed: AtomicU64,
     pub requests: AtomicU64,
     pub total_viewers: AtomicU64,
+    pub bytes_served: AtomicU64,
+    pub segments_served: AtomicU64,
+    pub playlists_served: AtomicU64,
 }
 
 impl Stats {
@@ -40,6 +44,9 @@ impl Stats {
             failed: AtomicU64::new(0),
             requests: AtomicU64::new(0),
             total_viewers: AtomicU64::new(0),
+            bytes_served: AtomicU64::new(0),
+            segments_served: AtomicU64::new(0),
+            playlists_served: AtomicU64::new(0),
         }
     }
 
@@ -50,6 +57,9 @@ impl Stats {
             failed: self.failed.load(Ordering::Relaxed) as usize,
             requests: self.requests.load(Ordering::Relaxed) as usize,
             total_viewers: self.total_viewers.load(Ordering::Relaxed) as usize,
+            bytes_served: self.bytes_served.load(Ordering::Relaxed),
+            segments_served: self.segments_served.load(Ordering::Relaxed),
+            playlists_served: self.playlists_served.load(Ordering::Relaxed),
         }
     }
 }
@@ -61,6 +71,9 @@ pub struct StatsSnapshot {
     pub failed: usize,
     pub requests: usize,
     pub total_viewers: usize,
+    pub bytes_served: u64,
+    pub segments_served: u64,
+    pub playlists_served: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,4 +93,6 @@ pub struct StatusResponse {
     pub stats: StatsSnapshot,
     pub cache_stats: Option<CacheStatsSnapshot>,
     pub uptime_seconds: i64,
+    pub throughput: ThroughputMetrics,
+    pub metrics_history: Vec<MetricPoint>,
 }
