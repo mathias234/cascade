@@ -1,6 +1,6 @@
 use anyhow::Result;
-use bytes::Bytes;
-use moka::future::Cache;
+use moka::future::{Cache, FutureExt};
+use moka::notification::{ListenerFuture, RemovalCause};
 use std::{
     path::Path,
     sync::{
@@ -49,16 +49,28 @@ impl SegmentCache {
             max_entries, max_segment_size
         );
 
-        // Build moka cache with TTL and max capacity
+        let stats = Arc::new(CacheStats::new());
+        let stats_clone = Arc::clone(&stats);
+
+        let eviction_listener = move |key: Arc<String>, value: CachedSegment, cause: RemovalCause| -> ListenerFuture {
+            debug!("Cache entry evicted: {} (cause: {:?}, size: {} bytes)", key, cause, value.data.len());
+
+            let size = value.data.len() as u64;
+            stats_clone.memory_bytes.fetch_sub(size, Ordering::Relaxed);
+
+            async {}.boxed()
+        };
+
         let cache = Cache::builder()
             .max_capacity(max_entries as u64)
             .time_to_live(Duration::from_secs(300))
+            .async_eviction_listener(eviction_listener)
             .build();
 
         Self {
             cache,
-            max_file_size: 100 * 1024 * 1024, // 100MB max file size
-            stats: Arc::new(CacheStats::new()),
+            max_file_size: 100 * 1024 * 1024,
+            stats,
         }
     }
 
@@ -74,19 +86,14 @@ impl SegmentCache {
             return Ok(Some((segment, true)));
         }
 
-        // Not cached, need to load from disk
-        // Clone necessary data for the async closure
         let file_path = file_path.to_path_buf();
         let max_file_size = self.max_file_size;
         let stats = Arc::clone(&self.stats);
         let key_string = key.to_string();
 
-        // Use try_get_with for atomic load-or-compute
-        // Moka ensures only one load happens even with concurrent requests
         let result = self
             .cache
             .try_get_with(key_string.clone(), async move {
-                // Get file metadata (also checks if file exists)
                 let metadata = match tokio::fs::metadata(&file_path).await {
                     Ok(m) => m,
                     Err(e) => {
@@ -96,7 +103,6 @@ impl SegmentCache {
                 };
                 let file_size = metadata.len() as usize;
 
-                // Validate file size
                 if file_size > max_file_size {
                     return Err(anyhow::anyhow!(
                         "File exceeds maximum size limit: {} > {}",
@@ -105,7 +111,6 @@ impl SegmentCache {
                     ));
                 }
 
-                // Determine content type based on extension
                 let content_type = match file_path.extension().and_then(|s| s.to_str()) {
                     Some("ts") => "video/MP2T",
                     _ => "application/octet-stream",
@@ -125,61 +130,15 @@ impl SegmentCache {
             })
             .await;
 
-        // We only get here if it was a cache miss (new load)
         match result {
             Ok(segment) => {
                 self.stats.misses.fetch_add(1, Ordering::Relaxed);
-                Ok(Some((segment, false))) // false = was not cached
+                Ok(Some((segment, false)))
             }
             Err(e) => {
                 error!("Failed to load {}: {}", key, e);
                 Ok(None)
             }
-        }
-    }
-
-    pub async fn invalidate_stream(&self, stream_key: &str) {
-        let prefix = format!("{}_", stream_key);
-        let stream_key_owned = stream_key.to_string();
-
-        // Use atomics for tracking since the closure must be Fn, not FnMut
-        let invalidated_count = Arc::new(AtomicU64::new(0));
-        let invalidated_memory = Arc::new(AtomicU64::new(0));
-
-        // Clone for the closure
-        let stats = Arc::clone(&self.stats);
-        let count_clone = Arc::clone(&invalidated_count);
-        let memory_clone = Arc::clone(&invalidated_memory);
-
-        // Invalidate all cache entries that belong to this stream
-        // This includes the main playlist and all segment files
-        let _ = self.cache.invalidate_entries_if(move |key, segment| {
-            // Check if this key belongs to the stream we're invalidating
-            // Match either exact stream key (for m3u8) or prefix (for segments)
-            if key == &stream_key_owned || key.starts_with(&prefix) {
-                count_clone.fetch_add(1, Ordering::Relaxed);
-
-                // Update memory stats based on what we're removing
-                let size = segment.data.len() as u64;
-                memory_clone.fetch_add(size, Ordering::Relaxed);
-                stats.memory_bytes.fetch_sub(size, Ordering::Relaxed);
-
-                true // Invalidate this entry
-            } else {
-                false // Keep this entry
-            }
-        });
-
-        let count = invalidated_count.load(Ordering::Relaxed);
-        let memory = invalidated_memory.load(Ordering::Relaxed);
-
-        if count > 0 {
-            info!(
-                "Invalidated {} cache entries for stream '{}' ({}B memory)",
-                count, stream_key, memory
-            );
-        } else {
-            debug!("No cache entries found for stream '{}'", stream_key);
         }
     }
 

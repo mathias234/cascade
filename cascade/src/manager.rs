@@ -281,9 +281,6 @@ impl StreamManager {
             self.stats.stopped.fetch_add(1, Ordering::Relaxed);
         }
 
-        // Invalidate cache entries for this stream
-        self.cache.invalidate_stream(stream_key).await;
-
         // Clear sessions for this stream
         self.session_manager.clear_stream_sessions(stream_key);
 
