@@ -54,7 +54,7 @@ impl SessionManager {
     /// Generate a new random session ID
     pub fn generate_session_id() -> String {
         const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         (0..8)
             .map(|_| {
                 let idx = rng.gen_range(0..CHARSET.len());
