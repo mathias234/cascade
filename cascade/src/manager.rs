@@ -109,12 +109,11 @@ impl StreamManager {
         let mut entries = fs::read_dir(&self.hls_path).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if let Some(ext) = path.extension() {
-                if ext == "m3u8" || ext == "ts" {
+            if let Some(ext) = path.extension()
+                && (ext == "m3u8" || ext == "ts") {
                     fs::remove_file(path).await.ok();
                     count += 1;
                 }
-            }
         }
         
         if count > 0 {

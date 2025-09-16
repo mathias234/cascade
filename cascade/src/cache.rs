@@ -122,7 +122,7 @@ impl SegmentCache {
                     .fetch_add(file_size as u64, Ordering::Relaxed);
 
                 let segment = CachedSegment {
-                    data: data,
+                    data,
                     content_type,
                 };
 
