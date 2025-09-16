@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     extract::{Path, Query, Request},
     http::{StatusCode, header},
-    response::{IntoResponse, Json, Response},
+    response::{Html, IntoResponse, Json, Response},
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -301,12 +301,30 @@ pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
         Ordering::Relaxed
     );
     let stats = manager.stats.to_snapshot();
+    
+    let cache_stats = Some(manager.cache.stats().await);
+    let uptime_seconds = now.signed_duration_since(manager.server_started_at).num_seconds();
 
     Json(StatusResponse {
         active_streams,
         pending_streams,
         failed_streams,
         stats,
+        cache_stats,
+        uptime_seconds,
     })
+}
+
+pub async fn dashboard() -> impl IntoResponse {
+    match tokio::fs::read_to_string("dashboard.html").await {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            error!("Failed to read dashboard.html: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Dashboard not available"
+            ).into_response()
+        }
+    }
 }
 

@@ -1,3 +1,4 @@
+use crate::cache::CacheStatsSnapshot;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
@@ -77,4 +78,6 @@ pub struct StatusResponse {
     pub pending_streams: Vec<String>,
     pub failed_streams: Vec<String>,
     pub stats: StatsSnapshot,
+    pub cache_stats: Option<CacheStatsSnapshot>,
+    pub uptime_seconds: i64,
 }

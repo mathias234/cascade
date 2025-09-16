@@ -32,6 +32,7 @@ pub struct StreamManager {
     pub stats: Arc<Stats>,
     pub cache: SegmentCache,
     pub session_manager: SessionManager,
+    pub server_started_at: DateTime<Utc>,
 }
 
 impl StreamManager {
@@ -88,6 +89,7 @@ impl StreamManager {
             stats: Arc::new(Stats::new()),
             cache: SegmentCache::new(cache_entries, max_segment_size),
             session_manager: SessionManager::new(),
+            server_started_at: Utc::now(),
         })
     }
 

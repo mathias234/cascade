@@ -193,7 +193,7 @@ impl SegmentCache {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CacheStatsSnapshot {
     pub total_entries: usize,
     pub hits: u64,

@@ -107,6 +107,8 @@ async fn main() -> Result<()> {
             let manager = manager.clone();
             move || handlers::status(manager.clone())
         }))
+        .route("/", get(handlers::dashboard))
+        .route("/dashboard", get(handlers::dashboard))
         .layer(middleware::from_fn(extract_client_info))
         .layer(middleware);
 
