@@ -164,7 +164,7 @@ impl StreamManager {
         cmd.arg("-nostdin")
             .arg("-re")
             .arg("-loglevel").arg("warning")
-            .arg("-rw_timeout").arg("2000000") // Read/write timeout
+            .arg("-rw_timeout").arg("500000") // Read/write timeout
             .arg("-i").arg(&rtmp_url)
             .arg("-c").arg("copy")
             .arg("-f").arg("hls")
