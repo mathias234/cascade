@@ -65,7 +65,7 @@ async fn extract_client_info(mut req: Request, next: Next) -> Response {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenv()?;
+    dotenv().ok(); // It's OK if .env doesn't exist (e.g., in Docker)
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()

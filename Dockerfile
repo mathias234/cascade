@@ -34,7 +34,7 @@ RUN apk add --no-cache \
     libgcc
 
 # Create directories
-RUN mkdir -p /var/www/hls /var/log/supervisor
+RUN mkdir -p /hls /var/log/supervisor
 
 # Copy the compiled binary from builder
 COPY --from=builder /app/target/release/cascade /cascade
