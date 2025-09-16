@@ -105,8 +105,6 @@ impl SegmentCache {
         let result = self
             .cache
             .try_get_with(key_string.clone(), async move {
-                info!("Cache MISS: {} - loading from disk", key_string);
-
                 // Get file metadata (also checks if file exists)
                 let metadata = match tokio::fs::metadata(&file_path).await {
                     Ok(m) => m,
@@ -136,7 +134,6 @@ impl SegmentCache {
                 stats
                     .memory_bytes
                     .fetch_add(file_size as u64, Ordering::Relaxed);
-                info!("Loaded to memory: {} ({} bytes)", key_string, file_size);
 
                 let segment = CachedSegment {
                     data: SegmentData::Memory(Bytes::from(data)),

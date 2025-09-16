@@ -29,6 +29,8 @@ axum-server = { version = "0.7", features = ["tls-rustls"], optional = true }
 tokio-stream = { version = "0.1", features = ["net"], optional = true }
 futures = { version = "0.3", optional = true }
 
+dotenv = "0.15.0"
+
 [features]
 default = []
 ssl = ["rustls-acme", "rustls", "tokio-rustls", "axum-server", "tokio-stream", "futures"]

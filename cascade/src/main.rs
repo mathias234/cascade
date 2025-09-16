@@ -26,6 +26,7 @@ use tower_http::{
     timeout::TimeoutLayer,
 };
 use tracing::info;
+use dotenv::dotenv;
 
 #[derive(Clone)]
 pub struct ClientInfo {
@@ -63,6 +64,7 @@ async fn extract_client_info(mut req: Request, next: Next) -> Response {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenv()?;
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()

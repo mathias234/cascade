@@ -206,9 +206,9 @@ async fn serve_segment(stream_key: &str, segment: &str, manager: Arc<StreamManag
         Ok(Some((cached_segment, was_cached))) => {
             let data_size = cached_segment.data.len();
             if was_cached {
-                info!("Serving from CACHE: {} ({} bytes)", segment, data_size);
+                debug!("Cache hit: {} ({} bytes)", segment, data_size);
             } else {
-                info!("Serving NEWLY LOADED: {} ({} bytes)", segment, data_size);
+                info!("Cache miss: {} ({} bytes)", segment, data_size);
             }
             Response::builder()
                 .status(StatusCode::OK)
