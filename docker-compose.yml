@@ -8,24 +8,7 @@ services:
     volumes:
       - ./hls:/hls
       - ./certs:/etc/cascade/certs
-    environment:
-      - SOURCE_HOST=${SOURCE_HOST}
-      - SOURCE_PORT=${SOURCE_PORT}
-      - STREAM_TIMEOUT=${STREAM_TIMEOUT}
-      - MAX_CONCURRENT_STREAMS=${MAX_CONCURRENT_STREAMS}
-      - STREAM_START_TIMEOUT=${STREAM_START_TIMEOUT}
-      - RUST_LOG=${RUST_LOG}
-      - HLS_PATH=${HLS_PATH}
-      - PORT=${PORT}
-      - VIEWER_TRACKING_ENABLED=${VIEWER_TRACKING_ENABLED}
-      - VIEWER_TIMEOUT_SECONDS=${VIEWER_TIMEOUT_SECONDS}
-      - SSL_ENABLED=${SSL_ENABLED:-false}
-      - SSL_DOMAINS=${SSL_DOMAINS:-}
-      - SSL_EMAIL=${SSL_EMAIL:-}
-      - SSL_STAGING=${SSL_STAGING:-true}
-      - SSL_CERT_CACHE_DIR=${SSL_CERT_CACHE_DIR:-/etc/cascade/certs}
-      - SSL_PORT=${SSL_PORT:-443}
-      - HTTP_REDIRECT=${HTTP_REDIRECT:-true}
+      - ./config.toml:/config.toml
     ports:
       - "80:8080"
       - "443:443"
