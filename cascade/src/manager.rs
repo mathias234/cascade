@@ -429,39 +429,6 @@ impl StreamManager {
         Ok(())
     }
 
-    async fn generate_master_playlist(
-        &self,
-        path: &std::path::Path,
-        variants: &[crate::config::StreamVariant],
-    ) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
-        let mut content = String::from("#EXTM3U\n#EXT-X-VERSION:3\n");
-
-        for variant in variants {
-            // Calculate bandwidth (video + audio bitrates in bits per second)
-            let bandwidth = (variant.bitrate + variant.audio_bitrate) * 1000;
-
-            content.push_str(&format!(
-                "#EXT-X-STREAM-INF:BANDWIDTH={},RESOLUTION={}x{},FRAME-RATE={},CODECS=\"avc1.{},mp4a.40.2\",NAME=\"{}\"\n",
-                bandwidth,
-                variant.width,
-                variant.height,
-                variant.framerate,
-                if variant.profile == "high" { "640028" } else { "4d001f" },
-                variant.name
-            ));
-            content.push_str(&format!("{}/index.m3u8\n", variant.name));
-        }
-
-        let mut file = tokio::fs::File::create(path).await?;
-        file.write_all(content.as_bytes()).await?;
-        file.flush().await?;
-
-        info!("Generated master playlist at {:?}", path);
-        Ok(())
-    }
-
     async fn stream_ready(&self, stream_key: &str) -> bool {
         // Check for ABR master playlist first
         if self.abr_config.enabled && !self.abr_config.variants.is_empty() {
