@@ -21,7 +21,7 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY cascade ./
 
 # Build the release binary (with SSL feature if supported)
-# Try to build with SSL feature first, fall back to without if it fails
+# The dependencies are already built by cargo-chef, this should be fast
 RUN cargo build --release --features ssl || cargo build --release
 
 # Runtime stage
