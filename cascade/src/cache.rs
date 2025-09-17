@@ -44,10 +44,10 @@ pub struct SegmentCache {
 }
 
 impl SegmentCache {
-    pub fn new(max_entries: usize, max_segment_size: usize) -> Self {
+    pub fn new(max_entries: usize, max_segment_size: usize, ttl_seconds: u64) -> Self {
         info!(
-            "Initializing segment cache with {} entries, max segment size: {} bytes",
-            max_entries, max_segment_size
+            "Initializing segment cache with {} entries, max segment size: {} bytes, TTL: {} seconds",
+            max_entries, max_segment_size, ttl_seconds
         );
 
         let stats = Arc::new(CacheStats::new());
@@ -70,13 +70,13 @@ impl SegmentCache {
 
         let cache = Cache::builder()
             .max_capacity(max_entries as u64)
-            .time_to_live(Duration::from_secs(300))
+            .time_to_live(Duration::from_secs(ttl_seconds))
             .async_eviction_listener(eviction_listener)
             .build();
 
         Self {
             cache,
-            max_file_size: 100 * 1024 * 1024,
+            max_file_size: max_segment_size,
             stats,
         }
     }

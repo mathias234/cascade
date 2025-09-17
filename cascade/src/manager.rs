@@ -35,6 +35,10 @@ pub struct StreamManager {
     pub session_manager: SessionManager,
     pub server_started_at: DateTime<Utc>,
     pub metrics_history: MetricsHistory,
+    // FFmpeg configuration
+    pub ffmpeg_hls_time: u32,
+    pub ffmpeg_hls_list_size: u32,
+    pub ffmpeg_rw_timeout: u32,
 }
 
 impl StreamManager {
@@ -77,6 +81,27 @@ impl StreamManager {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(10_485_760); // 10MB default
+        let cache_ttl_seconds = env::var("CACHE_TTL_SECONDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300); // 5 minutes default
+
+        // FFmpeg configuration
+        let ffmpeg_hls_time = env::var("FFMPEG_HLS_TIME")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1); // 1 second segments by default
+        let ffmpeg_hls_list_size = env::var("FFMPEG_HLS_LIST_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(20); // Keep 20 segments in playlist
+        let ffmpeg_rw_timeout = env::var("FFMPEG_RW_TIMEOUT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100000); // 100ms default
+
+        info!("FFmpeg config: HLS time={}, list size={}, rw_timeout={}",
+            ffmpeg_hls_time, ffmpeg_hls_list_size, ffmpeg_rw_timeout);
 
         Ok(StreamManager {
             srs_host,
@@ -89,10 +114,13 @@ impl StreamManager {
             pending_streams: Arc::new(DashMap::new()),
             failed_streams: Arc::new(DashMap::new()),
             stats: Arc::new(Stats::new()),
-            cache: SegmentCache::new(cache_entries, max_segment_size),
+            cache: SegmentCache::new(cache_entries, max_segment_size, cache_ttl_seconds),
             session_manager: SessionManager::new(),
             server_started_at: Utc::now(),
             metrics_history: MetricsHistory::new(),
+            ffmpeg_hls_time,
+            ffmpeg_hls_list_size,
+            ffmpeg_rw_timeout,
         })
     }
 
@@ -171,7 +199,7 @@ impl StreamManager {
             .arg("-loglevel")
             .arg("warning")
             .arg("-rw_timeout")
-            .arg("500000") // Read/write timeout
+            .arg(self.ffmpeg_rw_timeout.to_string())
             .arg("-i")
             .arg(&rtmp_url)
             .arg("-c")
@@ -179,9 +207,9 @@ impl StreamManager {
             .arg("-f")
             .arg("hls")
             .arg("-hls_time")
-            .arg("1")
+            .arg(self.ffmpeg_hls_time.to_string())
             .arg("-hls_list_size")
-            .arg("20")
+            .arg(self.ffmpeg_hls_list_size.to_string())
             .arg("-hls_flags")
             .arg("delete_segments+append_list")
             .arg("-hls_segment_filename")
