@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bytes::Bytes;
 use moka::future::{Cache, FutureExt};
 use moka::notification::{ListenerFuture, RemovalCause};
 use std::{
@@ -13,7 +14,7 @@ use tracing::{debug, error, info};
 
 #[derive(Clone)]
 pub struct CachedSegment {
-    pub data: Vec<u8>,
+    pub data: Bytes,
     pub content_type: &'static str,
 }
 
@@ -123,6 +124,7 @@ impl SegmentCache {
                 };
 
                 let data = tokio::fs::read(&file_path).await?;
+                let data = Bytes::from(data);
                 stats
                     .memory_bytes
                     .fetch_add(file_size as u64, Ordering::Relaxed);
