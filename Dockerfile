@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Planner stage - prepare the build recipe
 FROM chef AS planner
-COPY cascade ./
+COPY . ./
 RUN cargo chef prepare --recipe-path recipe.json
 
 # Builder stage
@@ -18,7 +18,7 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 # Copy the actual source code and build the application
-COPY cascade ./
+COPY . ./
 
 # Build the release binary (with SSL feature if supported)
 # The dependencies are already built by cargo-chef, this should be fast
@@ -40,7 +40,7 @@ RUN mkdir -p /hls /var/log/supervisor
 COPY --from=builder /app/target/release/cascade /cascade
 
 # Copy dashboard HTML file
-COPY cascade/dashboard.html /dashboard.html
+COPY dashboard.html /dashboard.html
 
 # Make it executable
 RUN chmod +x /cascade
