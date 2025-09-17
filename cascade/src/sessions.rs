@@ -1,7 +1,8 @@
+use crate::config::Config;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::Serialize;
-use std::{env, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -24,18 +25,9 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
-    pub fn new() -> Self {
-        let session_timeout = Duration::from_secs(
-            env::var("VIEWER_TIMEOUT_SECONDS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(30),
-        );
-
-        let tracking_enabled = env::var("VIEWER_TRACKING_ENABLED")
-            .ok()
-            .and_then(|s| s.parse::<bool>().ok())
-            .unwrap_or(true);
+    pub fn new(config: Arc<Config>) -> Self {
+        let session_timeout = Duration::from_secs(config.viewer.timeout_seconds);
+        let tracking_enabled = config.viewer.tracking_enabled;
 
         info!(
             "Session tracking: {} (timeout: {:?})",

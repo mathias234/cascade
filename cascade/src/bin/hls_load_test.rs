@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::time::{interval, sleep};
@@ -171,11 +171,17 @@ impl HlsClient {
             return Err(anyhow::anyhow!("HTTP {}", response.status()));
         }
 
-        self.metrics.requests_success.fetch_add(1, Ordering::Relaxed);
-        self.metrics.playlist_fetches.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .requests_success
+            .fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .playlist_fetches
+            .fetch_add(1, Ordering::Relaxed);
 
         let content = response.text().await?;
-        self.metrics.bytes_downloaded.fetch_add(content.len() as u64, Ordering::Relaxed);
+        self.metrics
+            .bytes_downloaded
+            .fetch_add(content.len() as u64, Ordering::Relaxed);
 
         // Parse master playlist to extract the actual playlist URL with context
         for line in content.lines() {
@@ -227,11 +233,17 @@ impl HlsClient {
             }
         }
 
-        self.metrics.requests_success.fetch_add(1, Ordering::Relaxed);
-        self.metrics.playlist_fetches.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .requests_success
+            .fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .playlist_fetches
+            .fetch_add(1, Ordering::Relaxed);
 
         let content = response.text().await?;
-        self.metrics.bytes_downloaded.fetch_add(content.len() as u64, Ordering::Relaxed);
+        self.metrics
+            .bytes_downloaded
+            .fetch_add(content.len() as u64, Ordering::Relaxed);
 
         self.parse_playlist(&content)
     }
@@ -280,7 +292,10 @@ impl HlsClient {
         let url = format!("{}{}", self.base_url, segment.uri);
         let start = Instant::now();
 
-        debug!("Downloading segment: {} (seq: {})", segment.uri, segment.sequence);
+        debug!(
+            "Downloading segment: {} (seq: {})",
+            segment.uri, segment.sequence
+        );
         self.metrics.requests_sent.fetch_add(1, Ordering::Relaxed);
 
         let response = self.http_client.get(&url).send().await?;
@@ -304,11 +319,19 @@ impl HlsClient {
         // Download the segment data (but don't decode it)
         let bytes = response.bytes().await?;
 
-        self.metrics.requests_success.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .requests_success
+            .fetch_add(1, Ordering::Relaxed);
         self.metrics.segment_fetches.fetch_add(1, Ordering::Relaxed);
-        self.metrics.bytes_downloaded.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        self.metrics
+            .bytes_downloaded
+            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
 
-        debug!("Downloaded segment {} ({} bytes)", segment.sequence, bytes.len());
+        debug!(
+            "Downloaded segment {} ({} bytes)",
+            segment.sequence,
+            bytes.len()
+        );
         Ok(())
     }
 
@@ -335,9 +358,8 @@ impl HlsClient {
             };
 
             // Update refresh interval based on target duration
-            playlist_refresh_interval = interval(Duration::from_secs_f64(
-                playlist.target_duration / 2.0,
-            ));
+            playlist_refresh_interval =
+                interval(Duration::from_secs_f64(playlist.target_duration / 2.0));
 
             // Download new segments
             for segment in &playlist.segments {
@@ -427,7 +449,7 @@ async fn spawn_viewers(
 
                     // Random playback duration
                     let play_duration = Duration::from_secs(
-                        30 + (rand::random::<u64>() % max_duration.as_secs().max(30))
+                        30 + (rand::random::<u64>() % max_duration.as_secs().max(30)),
                     );
 
                     let mut client = HlsClient::new(base_url, stream_key, metrics);
@@ -504,12 +526,21 @@ async fn print_metrics(metrics: &Arc<Metrics>, elapsed: Duration, detailed: bool
 
     println!("\n=== Performance Metrics ===");
     println!("Test Duration: {:.1}s", elapsed.as_secs_f64());
-    println!("Active Viewers: {}", metrics.active_viewers.load(Ordering::Relaxed));
+    println!(
+        "Active Viewers: {}",
+        metrics.active_viewers.load(Ordering::Relaxed)
+    );
 
     println!("\n--- Requests ---");
     println!("Total: {}", metrics.requests_sent.load(Ordering::Relaxed));
-    println!("Success: {}", metrics.requests_success.load(Ordering::Relaxed));
-    println!("Failed: {}", metrics.requests_failed.load(Ordering::Relaxed));
+    println!(
+        "Success: {}",
+        metrics.requests_success.load(Ordering::Relaxed)
+    );
+    println!(
+        "Failed: {}",
+        metrics.requests_failed.load(Ordering::Relaxed)
+    );
     println!(
         "Success Rate: {:.2}%",
         (metrics.requests_success.load(Ordering::Relaxed) as f64
@@ -518,8 +549,14 @@ async fn print_metrics(metrics: &Arc<Metrics>, elapsed: Duration, detailed: bool
     );
 
     println!("\n--- Content ---");
-    println!("Playlists: {}", metrics.playlist_fetches.load(Ordering::Relaxed));
-    println!("Segments: {}", metrics.segment_fetches.load(Ordering::Relaxed));
+    println!(
+        "Playlists: {}",
+        metrics.playlist_fetches.load(Ordering::Relaxed)
+    );
+    println!(
+        "Segments: {}",
+        metrics.segment_fetches.load(Ordering::Relaxed)
+    );
     println!(
         "Data Downloaded: {:.2} MB",
         metrics.bytes_downloaded.load(Ordering::Relaxed) as f64 / 1_048_576.0
@@ -527,11 +564,14 @@ async fn print_metrics(metrics: &Arc<Metrics>, elapsed: Duration, detailed: bool
     println!("Throughput: {:.2} MB/s", throughput);
 
     println!("\n--- Cache ---");
-    let cache_total = metrics.cache_hits.load(Ordering::Relaxed)
-        + metrics.cache_misses.load(Ordering::Relaxed);
+    let cache_total =
+        metrics.cache_hits.load(Ordering::Relaxed) + metrics.cache_misses.load(Ordering::Relaxed);
     if cache_total > 0 {
         println!("Cache Hits: {}", metrics.cache_hits.load(Ordering::Relaxed));
-        println!("Cache Misses: {}", metrics.cache_misses.load(Ordering::Relaxed));
+        println!(
+            "Cache Misses: {}",
+            metrics.cache_misses.load(Ordering::Relaxed)
+        );
         println!(
             "Hit Rate: {:.2}%",
             (metrics.cache_hits.load(Ordering::Relaxed) as f64 / cache_total as f64) * 100.0
@@ -545,12 +585,12 @@ async fn print_metrics(metrics: &Arc<Metrics>, elapsed: Duration, detailed: bool
 
     if detailed {
         println!("\n--- Request Rate ---");
-        let requests_per_sec = metrics.requests_sent.load(Ordering::Relaxed) as f64
-            / elapsed.as_secs_f64();
+        let requests_per_sec =
+            metrics.requests_sent.load(Ordering::Relaxed) as f64 / elapsed.as_secs_f64();
         println!("Requests/sec: {:.1}", requests_per_sec);
 
-        let segments_per_sec = metrics.segment_fetches.load(Ordering::Relaxed) as f64
-            / elapsed.as_secs_f64();
+        let segments_per_sec =
+            metrics.segment_fetches.load(Ordering::Relaxed) as f64 / elapsed.as_secs_f64();
         println!("Segments/sec: {:.1}", segments_per_sec);
     }
 }
@@ -559,9 +599,7 @@ async fn print_metrics(metrics: &Arc<Metrics>, elapsed: Duration, detailed: bool
 async fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
     let args = Args::parse();

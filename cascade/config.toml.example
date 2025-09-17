@@ -1,0 +1,94 @@
+# Cascade Configuration
+# Copy this file to config.toml and configure with your values
+
+# Server Configuration
+[server]
+port = 8080
+hls_path = "/hls"
+
+# RTMP Source Configuration
+[rtmp]
+source_host = "rtmp.example.com"
+source_port = 1935
+
+# Stream Configuration
+[stream]
+max_concurrent_streams = 50
+stream_timeout = 30          # Seconds before marking stream as inactive
+stream_start_timeout = 15    # Seconds to wait for stream to start
+
+# FFmpeg Configuration
+[ffmpeg]
+hls_time = 1                 # Duration of each HLS segment in seconds
+hls_list_size = 20          # Number of segments to keep in playlist
+rw_timeout = 100000         # Read/write timeout in microseconds
+
+# ABR (Adaptive Bitrate) Configuration
+[abr]
+enabled = true              # Enable ABR with multiple quality variants
+
+# Define stream variants (from lowest to highest quality)
+[[abr.variants]]
+name = "360p"
+width = 640
+height = 360
+bitrate = 800               # Video bitrate in kbps
+audio_bitrate = 96          # Audio bitrate in kbps
+framerate = 30
+profile = "main"            # H.264 profile: baseline, main, or high
+preset = "veryfast"         # FFmpeg preset: ultrafast, veryfast, fast, medium, slow
+
+[[abr.variants]]
+name = "480p"
+width = 854
+height = 480
+bitrate = 1400
+audio_bitrate = 128
+framerate = 30
+profile = "main"
+preset = "veryfast"
+
+[[abr.variants]]
+name = "720p"
+width = 1280
+height = 720
+bitrate = 2800
+audio_bitrate = 128
+framerate = 30
+profile = "main"
+preset = "veryfast"
+
+[[abr.variants]]
+name = "1080p"
+width = 1920
+height = 1080
+bitrate = 5000
+audio_bitrate = 192
+framerate = 30
+profile = "high"
+preset = "veryfast"
+
+# Cache Configuration
+[cache]
+max_entries = 200           # Maximum number of cached segments
+max_segment_size = 10485760 # Maximum size per segment in bytes (10MB)
+ttl_seconds = 300           # Cache time-to-live in seconds (5 minutes)
+
+# Viewer Tracking Configuration
+[viewer]
+tracking_enabled = true
+timeout_seconds = 30        # Seconds before marking viewer as inactive
+
+# SSL/TLS Configuration (requires ssl feature flag)
+[ssl]
+enabled = false
+domains = ["example.com", "www.example.com"]
+email = "admin@example.com"
+staging = true              # Use Let's Encrypt staging environment for testing
+cert_cache_dir = "/etc/cascade/certs"
+port = 443
+http_redirect = true        # Redirect HTTP to HTTPS when SSL is enabled
+
+# Logging Configuration
+[logging]
+level = "info"              # Options: trace, debug, info, warn, error

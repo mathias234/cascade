@@ -8,34 +8,31 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
-use super::{acme::create_acme_components, config::SslConfig};
-use crate::manager::StreamManager;
+use super::acme::create_acme_components;
+use crate::{config::Config, manager::StreamManager};
 
 pub async fn run_tls_server(
     app: Router,
     manager: Arc<StreamManager>,
-    ssl_config: SslConfig,
+    config: Arc<Config>,
 ) -> Result<()> {
-    let (acceptor, _rustls_config) = create_acme_components(&ssl_config).await?;
+    let (acceptor, _rustls_config) = create_acme_components(&config.ssl).await?;
 
     // Spawn HTTPS server
     let tls_app = app.clone();
-    let tls_handle = tokio::spawn(run_https_server(tls_app, acceptor, ssl_config.ssl_port));
+    let tls_handle = tokio::spawn(run_https_server(tls_app, acceptor, config.ssl.port));
 
     // Spawn HTTP server (for redirect or to serve regular HTTP)
-    let http_handle = if ssl_config.http_redirect {
+    let http_handle = if config.ssl.http_redirect {
         let redirect_handle = tokio::spawn(run_http_redirect_server(
-            ssl_config.domains[0].clone(),
-            ssl_config.ssl_port,
+            config.ssl.domains[0].clone(),
+            config.ssl.port,
         ));
         Some(redirect_handle)
     } else {
-        // Run regular HTTP server on port 80
+        // Run regular HTTP server
         let http_app = app.clone();
-        let port = std::env::var("PORT")
-            .unwrap_or_else(|_| "80".to_string())
-            .parse::<u16>()
-            .unwrap_or(80);
+        let port = config.server.port;
         let http_handle = tokio::spawn(run_http_server(http_app, port));
         Some(http_handle)
     };

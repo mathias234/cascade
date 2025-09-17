@@ -1,4 +1,5 @@
 mod cache;
+mod config;
 mod handlers;
 mod manager;
 mod metrics;
@@ -14,10 +15,9 @@ use axum::{
     http::{Method, header},
     routing::get,
 };
-use dotenv::dotenv;
+use config::Config;
 use manager::StreamManager;
 use std::{
-    env,
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
@@ -32,12 +32,22 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenv().ok(); // It's OK if .env doesn't exist (e.g., in Docker)
+    // Load configuration from file, fall back to defaults if not found
+    let config = match Config::from_file("config.toml") {
+        Ok(cfg) => cfg,
+        Err(_) => {
+            eprintln!("config.toml not found, using default configuration");
+            Config::default()
+        }
+    };
+
+    // Initialize logging
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(tracing_subscriber::EnvFilter::new(&config.logging.level))
         .init();
 
-    let manager = Arc::new(StreamManager::new()?);
+    let config = Arc::new(config);
+    let manager = Arc::new(StreamManager::new(config.clone())?);
     manager.init().await?;
 
     let manager_cleanup = manager.clone();
@@ -132,15 +142,13 @@ async fn main() -> Result<()> {
 
     #[cfg(feature = "ssl")]
     {
-        let ssl_config = ssl::SslConfig::from_env()?;
-        if ssl_config.enabled {
+        if config.ssl.enabled {
             info!("SSL is enabled, starting TLS server");
-            return ssl::run_tls_server(app, manager, ssl_config).await;
+            return ssl::run_tls_server(app, manager, config.clone()).await;
         }
     }
 
-    let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("0.0.0.0:{}", config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!("HTTP server listening on {}", addr);
     info!(

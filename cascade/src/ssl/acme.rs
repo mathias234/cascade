@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::fs;
 use tracing::{error, info, warn};
 
-use super::config::SslConfig;
+use crate::config::SslConfig;
 
 pub async fn create_acme_components(
     config: &SslConfig,
@@ -17,7 +17,11 @@ pub async fn create_acme_components(
     let mut acme_config = AcmeConfig::new(&config.domains)
         .contact(vec![format!("mailto:{}", config.email)])
         .cache(DirCache::new(config.cert_cache_dir.clone()))
-        .directory(config.acme_directory_url());
+        .directory(if config.staging {
+            "https://acme-staging-v02.api.letsencrypt.org/directory"
+        } else {
+            "https://acme-v02.api.letsencrypt.org/directory"
+        });
 
     if config.staging {
         warn!(

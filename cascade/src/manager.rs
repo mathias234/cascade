@@ -1,4 +1,5 @@
 use crate::cache::SegmentCache;
+use crate::config::Config;
 use crate::metrics::MetricsHistory;
 use crate::models::{Stats, StreamInfo};
 use crate::sessions::SessionManager;
@@ -6,7 +7,6 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::{
-    env,
     path::PathBuf,
     process::Stdio,
     sync::{Arc, atomic::Ordering},
@@ -39,32 +39,19 @@ pub struct StreamManager {
     pub ffmpeg_hls_time: u32,
     pub ffmpeg_hls_list_size: u32,
     pub ffmpeg_rw_timeout: u32,
+    // ABR configuration
+    pub abr_config: crate::config::AbrConfig,
 }
 
 impl StreamManager {
-    pub fn new() -> Result<Self> {
-        let srs_host = env::var("SOURCE_HOST").unwrap_or_else(|_| "rtmp.example.com".to_string());
-        let srs_port = env::var("SOURCE_PORT").unwrap_or_else(|_| "1935".to_string());
-        let hls_path = PathBuf::from(env::var("HLS_PATH").unwrap_or_else(|_| "./hls".to_string()));
+    pub fn new(config: Arc<Config>) -> Result<Self> {
+        let srs_host = config.rtmp.source_host.clone();
+        let srs_port = config.rtmp.source_port.to_string();
+        let hls_path = PathBuf::from(&config.server.hls_path);
 
-        let stream_timeout = Duration::from_secs(
-            env::var("STREAM_TIMEOUT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(30),
-        );
-
-        let max_concurrent_streams = env::var("MAX_CONCURRENT_STREAMS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(50);
-
-        let stream_start_timeout = Duration::from_secs(
-            env::var("STREAM_START_TIMEOUT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(15),
-        );
+        let stream_timeout = Duration::from_secs(config.stream.stream_timeout);
+        let max_concurrent_streams = config.stream.max_concurrent_streams;
+        let stream_start_timeout = Duration::from_secs(config.stream.stream_start_timeout);
 
         info!("Stream Manager starting...");
         info!("Source: rtmp://{}:{}/live/", srs_host, srs_port);
@@ -73,35 +60,19 @@ impl StreamManager {
         info!("Stream timeout: {:?}", stream_timeout);
 
         // Cache configuration
-        let cache_entries = env::var("CACHE_MAX_ENTRIES")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(200);
-        let max_segment_size = env::var("CACHE_MAX_SEGMENT_SIZE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(10_485_760); // 10MB default
-        let cache_ttl_seconds = env::var("CACHE_TTL_SECONDS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(300); // 5 minutes default
+        let cache_entries = config.cache.max_entries;
+        let max_segment_size = config.cache.max_segment_size;
+        let cache_ttl_seconds = config.cache.ttl_seconds;
 
         // FFmpeg configuration
-        let ffmpeg_hls_time = env::var("FFMPEG_HLS_TIME")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1); // 1 second segments by default
-        let ffmpeg_hls_list_size = env::var("FFMPEG_HLS_LIST_SIZE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(20); // Keep 20 segments in playlist
-        let ffmpeg_rw_timeout = env::var("FFMPEG_RW_TIMEOUT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(100000); // 100ms default
+        let ffmpeg_hls_time = config.ffmpeg.hls_time as u32;
+        let ffmpeg_hls_list_size = config.ffmpeg.hls_list_size as u32;
+        let ffmpeg_rw_timeout = config.ffmpeg.rw_timeout as u32;
 
-        info!("FFmpeg config: HLS time={}, list size={}, rw_timeout={}",
-            ffmpeg_hls_time, ffmpeg_hls_list_size, ffmpeg_rw_timeout);
+        info!(
+            "FFmpeg config: HLS time={}, list size={}, rw_timeout={}",
+            ffmpeg_hls_time, ffmpeg_hls_list_size, ffmpeg_rw_timeout
+        );
 
         Ok(StreamManager {
             srs_host,
@@ -115,12 +86,13 @@ impl StreamManager {
             failed_streams: Arc::new(DashMap::new()),
             stats: Arc::new(Stats::new()),
             cache: SegmentCache::new(cache_entries, max_segment_size, cache_ttl_seconds),
-            session_manager: SessionManager::new(),
+            session_manager: SessionManager::new(config.clone()),
             server_started_at: Utc::now(),
             metrics_history: MetricsHistory::new(),
             ffmpeg_hls_time,
             ffmpeg_hls_list_size,
             ffmpeg_rw_timeout,
+            abr_config: config.abr.clone(),
         })
     }
 
@@ -189,10 +161,6 @@ impl StreamManager {
         let stream_dir = self.hls_path.join(&stream_key);
         tokio::fs::create_dir_all(&stream_dir).await.ok();
 
-        // Output paths in subdirectory
-        let m3u8_path = stream_dir.join("index.m3u8");
-        let segment_path = stream_dir.join(format!("{}_%03d.ts", stream_key));
-
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-nostdin")
             .arg("-re")
@@ -201,22 +169,137 @@ impl StreamManager {
             .arg("-rw_timeout")
             .arg(self.ffmpeg_rw_timeout.to_string())
             .arg("-i")
-            .arg(&rtmp_url)
-            .arg("-c")
-            .arg("copy")
-            .arg("-f")
-            .arg("hls")
-            .arg("-hls_time")
-            .arg(self.ffmpeg_hls_time.to_string())
-            .arg("-hls_list_size")
-            .arg(self.ffmpeg_hls_list_size.to_string())
-            .arg("-hls_flags")
-            .arg("delete_segments+append_list")
-            .arg("-hls_segment_filename")
-            .arg(segment_path.to_str().unwrap())
-            .arg(m3u8_path.to_str().unwrap())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .arg(&rtmp_url);
+
+        if self.abr_config.enabled && !self.abr_config.variants.is_empty() {
+            // ABR mode: Generate multiple variants using a single FFmpeg command
+            info!(
+                "Starting ABR stream {} with {} variants",
+                stream_key,
+                self.abr_config.variants.len()
+            );
+
+            // Create directories for all variants
+            for variant in &self.abr_config.variants {
+                let variant_dir = stream_dir.join(&variant.name);
+                tokio::fs::create_dir_all(&variant_dir).await.ok();
+            }
+
+            // Build filter complex with split for each variant
+            let variant_count = self.abr_config.variants.len();
+            let mut filter_complex = format!("[0:v]split={}", variant_count);
+
+            // Add split outputs
+            for i in 0..variant_count {
+                filter_complex.push_str(&format!("[v{}]", i));
+            }
+            filter_complex.push_str("; ");
+
+            // Add scaling for each variant
+            for (i, variant) in self.abr_config.variants.iter().enumerate() {
+                if i > 0 {
+                    filter_complex.push_str("; ");
+                }
+                filter_complex.push_str(&format!(
+                    "[v{}]scale={}:{},fps={}[v{}out]",
+                    i, variant.width, variant.height, variant.framerate, i
+                ));
+            }
+
+            cmd.arg("-filter_complex").arg(&filter_complex);
+
+            // Map video and audio for each variant
+            for (i, variant) in self.abr_config.variants.iter().enumerate() {
+                // Map the scaled video stream
+                cmd.arg("-map").arg(format!("[v{}out]", i));
+
+                // Video encoding settings
+                cmd.arg(format!("-c:v:{}", i))
+                    .arg("libx264")
+                    .arg(format!("-preset:v:{}", i))
+                    .arg(&variant.preset)
+                    .arg(format!("-profile:v:{}", i))
+                    .arg(&variant.profile)
+                    .arg(format!("-b:v:{}", i))
+                    .arg(format!("{}k", variant.bitrate))
+                    .arg(format!("-maxrate:v:{}", i))
+                    .arg(format!("{}k", (variant.bitrate as f32 * 1.1) as u32))
+                    .arg(format!("-bufsize:v:{}", i))
+                    .arg(format!("{}k", variant.bitrate * 2))
+                    .arg(format!("-g:v:{}", i))
+                    .arg((variant.framerate * 2).to_string())
+                    .arg(format!("-keyint_min:v:{}", i))
+                    .arg(variant.framerate.to_string())
+                    .arg(format!("-sc_threshold:v:{}", i))
+                    .arg("0");
+            }
+
+            // Map audio for each variant
+            for (i, variant) in self.abr_config.variants.iter().enumerate() {
+                cmd.arg("-map").arg("0:a");
+
+                // Audio encoding settings
+                cmd.arg(format!("-c:a:{}", i))
+                    .arg("aac")
+                    .arg(format!("-b:a:{}", i))
+                    .arg(format!("{}k", variant.audio_bitrate))
+                    .arg(format!("-ac:{}", i))
+                    .arg("2");
+            }
+
+            // HLS output settings (single format for all variants)
+            cmd.arg("-f")
+                .arg("hls")
+                .arg("-hls_time")
+                .arg(self.ffmpeg_hls_time.to_string())
+                .arg("-hls_list_size")
+                .arg(self.ffmpeg_hls_list_size.to_string())
+                .arg("-hls_flags")
+                .arg("delete_segments+append_list+independent_segments")
+                .arg("-hls_segment_type")
+                .arg("mpegts")
+                .arg("-hls_segment_filename")
+                .arg(stream_dir.join("%v/segment_%03d.ts").to_str().unwrap())
+                .arg("-master_pl_name")
+                .arg("master.m3u8");
+
+            // Build var_stream_map
+            let mut var_stream_map = String::new();
+            for i in 0..variant_count {
+                if i > 0 {
+                    var_stream_map.push(' ');
+                }
+                var_stream_map.push_str(&format!(
+                    "v:{},a:{},name:{}",
+                    i, i, self.abr_config.variants[i].name
+                ));
+            }
+
+            cmd.arg("-var_stream_map")
+                .arg(var_stream_map)
+                .arg(stream_dir.join("%v/index.m3u8").to_str().unwrap());
+        } else {
+            // Single bitrate mode: Just copy the stream
+            info!("Starting single bitrate stream {}", stream_key);
+            let m3u8_path = stream_dir.join("index.m3u8");
+            let segment_path = stream_dir.join(format!("{}_%03d.ts", stream_key));
+
+            cmd.arg("-c")
+                .arg("copy")
+                .arg("-f")
+                .arg("hls")
+                .arg("-hls_time")
+                .arg(self.ffmpeg_hls_time.to_string())
+                .arg("-hls_list_size")
+                .arg(self.ffmpeg_hls_list_size.to_string())
+                .arg("-hls_flags")
+                .arg("delete_segments+append_list")
+                .arg("-hls_segment_filename")
+                .arg(segment_path.to_str().unwrap())
+                .arg(m3u8_path.to_str().unwrap());
+        }
+
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         match cmd.spawn() {
             Ok(mut child) => {
@@ -346,12 +429,65 @@ impl StreamManager {
         Ok(())
     }
 
-    async fn stream_ready(&self, stream_key: &str) -> bool {
-        let m3u8_path = self.hls_path.join(stream_key).join("index.m3u8");
+    async fn generate_master_playlist(
+        &self,
+        path: &std::path::Path,
+        variants: &[crate::config::StreamVariant],
+    ) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
 
-        if let Ok(content) = fs::read_to_string(&m3u8_path).await {
-            let segments = content.matches(".ts").count();
-            return segments >= 1;
+        let mut content = String::from("#EXTM3U\n#EXT-X-VERSION:3\n");
+
+        for variant in variants {
+            // Calculate bandwidth (video + audio bitrates in bits per second)
+            let bandwidth = (variant.bitrate + variant.audio_bitrate) * 1000;
+
+            content.push_str(&format!(
+                "#EXT-X-STREAM-INF:BANDWIDTH={},RESOLUTION={}x{},FRAME-RATE={},CODECS=\"avc1.{},mp4a.40.2\",NAME=\"{}\"\n",
+                bandwidth,
+                variant.width,
+                variant.height,
+                variant.framerate,
+                if variant.profile == "high" { "640028" } else { "4d001f" },
+                variant.name
+            ));
+            content.push_str(&format!("{}/index.m3u8\n", variant.name));
+        }
+
+        let mut file = tokio::fs::File::create(path).await?;
+        file.write_all(content.as_bytes()).await?;
+        file.flush().await?;
+
+        info!("Generated master playlist at {:?}", path);
+        Ok(())
+    }
+
+    async fn stream_ready(&self, stream_key: &str) -> bool {
+        // Check for ABR master playlist first
+        if self.abr_config.enabled && !self.abr_config.variants.is_empty() {
+            let master_path = self.hls_path.join(stream_key).join("master.m3u8");
+            if master_path.exists() {
+                // Check if at least one variant has segments
+                for variant in &self.abr_config.variants {
+                    let variant_m3u8 = self
+                        .hls_path
+                        .join(stream_key)
+                        .join(&variant.name)
+                        .join("index.m3u8");
+                    if let Ok(content) = fs::read_to_string(&variant_m3u8).await {
+                        if content.matches(".ts").count() >= 1 {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Single bitrate mode
+            let m3u8_path = self.hls_path.join(stream_key).join("index.m3u8");
+            if let Ok(content) = fs::read_to_string(&m3u8_path).await {
+                let segments = content.matches(".ts").count();
+                return segments >= 1;
+            }
         }
 
         false
