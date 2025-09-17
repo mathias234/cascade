@@ -299,6 +299,8 @@ impl StreamManager {
                 .arg(m3u8_path.to_str().unwrap());
         }
 
+        debug!("FFMPEG Command {:#?}", cmd);
+
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         match cmd.spawn() {

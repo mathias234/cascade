@@ -1,5 +1,5 @@
 # Use cargo-chef for efficient Docker layer caching
-FROM lukemathwalker/cargo-chef:latest-rust-alpine3.20 AS chef
+FROM rust:1.89-bullseye AS chef
 WORKDIR /app
 
 # Planner stage - prepare the build recipe
@@ -9,29 +9,25 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 # Builder stage
 FROM chef AS builder
-RUN apk add --no-cache musl-dev
+COPY . .
 
-# Copy recipe from planner
-COPY --from=planner /app/recipe.json recipe.json
+RUN apt-get update && apt-get install -y \
+    musl-dev \
+    libssl-dev \
+    pkg-config
 
-# Build dependencies - this is the caching Docker layer!
-RUN cargo chef cook --release --recipe-path recipe.json
-
-# Copy the actual source code and build the application
-COPY . ./
-
-# Build the release binary (with SSL feature if supported)
-# The dependencies are already built by cargo-chef, this should be fast
-RUN cargo build --release --features ssl || cargo build --release
+RUN cargo build --release --features ssl --bin cascade
 
 # Runtime stage
-FROM alpine:3.20
+FROM rust:1.89-bullseye
 
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     ffmpeg \
     supervisor \
     curl \
-    libgcc
+    gcc \
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Create directories
 RUN mkdir -p /hls /var/log/supervisor

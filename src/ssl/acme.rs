@@ -12,7 +12,7 @@ use crate::config::SslConfig;
 pub async fn create_acme_components(
     config: &SslConfig,
 ) -> Result<(rustls_acme::axum::AxumAcceptor, Arc<ServerConfig>)> {
-    ensure_cert_cache_dir(&config.cert_cache_dir).await?;
+    ensure_cert_cache_dir(Path::new(&config.cert_cache_dir)).await?;
 
     let mut acme_config = AcmeConfig::new(&config.domains)
         .contact(vec![format!("mailto:{}", config.email)])
