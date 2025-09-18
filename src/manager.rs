@@ -163,7 +163,6 @@ impl StreamManager {
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-nostdin")
-            .arg("-re")
             .arg("-loglevel")
             .arg("warning")
             .arg("-rw_timeout")
