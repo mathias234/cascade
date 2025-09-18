@@ -25,7 +25,6 @@ use std::{
 use tokio::signal;
 use tower::ServiceBuilder;
 use tower_http::{
-    compression::CompressionLayer,
     cors::{Any, CorsLayer},
     timeout::TimeoutLayer,
 };
@@ -127,8 +126,6 @@ async fn main() -> Result<()> {
     let middleware = ServiceBuilder::new()
         // Timeout requests after 30 seconds
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
-        // Enable gzip compression for responses
-        .layer(CompressionLayer::new())
         // CORS configuration for HLS playback
         .layer(
             CorsLayer::new()
