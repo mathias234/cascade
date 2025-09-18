@@ -1,5 +1,6 @@
 mod cache;
 mod config;
+mod elasticsearch;
 mod handlers;
 mod manager;
 mod metrics;
@@ -91,9 +92,34 @@ async fn main() -> Result<()> {
                     cache_stats.misses,
                     cache_stats.memory_bytes,
                     cache_stats.total_entries,
-                    stream_viewers,
+                    stream_viewers.clone(),
                 )
                 .await;
+
+            // Index metrics to Elasticsearch
+            let throughput = manager_metrics.metrics_history.get_current_throughput().await;
+            let cache_hit_rate = if cache_stats.hits + cache_stats.misses > 0 {
+                (cache_stats.hits as f64 / (cache_stats.hits + cache_stats.misses) as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            let metrics_doc = crate::elasticsearch::MetricsDocument {
+                timestamp: chrono::Utc::now(),
+                server_name: String::new(), // Will be filled by ElasticsearchClient
+                bytes_per_second: throughput.bytes_per_second,
+                requests_per_second: throughput.requests_per_second,
+                segments_per_second: throughput.segments_per_second,
+                viewers,
+                active_streams,
+                cache_hit_rate,
+                cache_memory_mb: cache_stats.memory_bytes as f64 / 1_048_576.0,
+                cache_entries: cache_stats.total_entries,
+                mbps: throughput.mbps,
+                stream_viewers,
+            };
+
+            manager_metrics.elasticsearch.index_metrics(metrics_doc).await;
         }
     });
 

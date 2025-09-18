@@ -92,3 +92,12 @@ http_redirect = true        # Redirect HTTP to HTTPS when SSL is enabled
 # Logging Configuration
 [logging]
 level = "info"              # Options: trace, debug, info, warn, error
+
+# Elasticsearch Configuration
+[elasticsearch]
+enabled = false
+url = "http://localhost:9200"
+index_prefix = "cascade-metrics"
+batch_size = 10
+flush_interval_seconds = 10
+server_name = "edge-1"  # Optional: unique identifier for this edge server

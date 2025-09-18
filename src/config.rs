@@ -13,6 +13,7 @@ pub struct Config {
     pub viewer: ViewerConfig,
     pub ssl: SslConfig,
     pub logging: LoggingConfig,
+    pub elasticsearch: ElasticsearchConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -86,6 +87,16 @@ pub struct SslConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LoggingConfig {
     pub level: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ElasticsearchConfig {
+    pub enabled: bool,
+    pub url: Option<String>,
+    pub index_prefix: String,
+    pub batch_size: usize,
+    pub flush_interval_seconds: u64,
+    pub server_name: Option<String>,
 }
 
 impl Config {
@@ -182,6 +193,14 @@ impl Config {
             },
             logging: LoggingConfig {
                 level: "info".to_string(),
+            },
+            elasticsearch: ElasticsearchConfig {
+                enabled: false,
+                url: Some("http://localhost:9200".to_string()),
+                index_prefix: "cascade-metrics".to_string(),
+                batch_size: 10,
+                flush_interval_seconds: 10,
+                server_name: None,
             },
         }
     }

@@ -16,11 +16,11 @@ A high-performance HLS (HTTP Live Streaming) edge server built in Rust. Cascade 
 ### Using Docker Compose
 
 1. Clone the repository
-2. Copy the environment configuration:
+2. Copy the configuration file:
    ```bash
-   cp .env.example .env
+   cp config.toml.example config.toml
    ```
-3. Edit `.env` with your RTMP source server details
+3. Edit `config.toml` with your RTMP source server details
 4. Start the service:
    ```bash
    docker-compose up -d
@@ -36,16 +36,36 @@ cargo run
 
 ## Configuration
 
-Configure Cascade using environment variables in your `.env` file:
+Configure Cascade using the `config.toml` file. See `config.toml.example` for all available options:
 
-- `SOURCE_HOST` - RTMP source server hostname
-- `SOURCE_PORT` - RTMP source server port (default: 1935)
-- `STREAM_TIMEOUT` - Idle stream timeout in seconds (default: 30)
-- `MAX_CONCURRENT_STREAMS` - Maximum concurrent streams (default: 50)
-- `HLS_PATH` - Directory for HLS output (default: /hls)
-- `PORT` - HTTP server port (default: 8080)
-- `VIEWER_TRACKING_ENABLED` - Enable viewer tracking (default: true)
-- `VIEWER_TIMEOUT_SECONDS` - Seconds before marking viewer inactive (default: 30)
+### Key Configuration Sections:
+
+**Server Configuration**
+- `server.port` - HTTP server port (default: 8080)
+- `server.hls_path` - Directory for HLS output (default: /hls)
+
+**RTMP Source**
+- `rtmp.source_host` - RTMP source server hostname
+- `rtmp.source_port` - RTMP source server port (default: 1935)
+
+**Stream Management**
+- `stream.max_concurrent_streams` - Maximum concurrent streams (default: 50)
+- `stream.stream_timeout` - Idle stream timeout in seconds (default: 30)
+- `stream.stream_start_timeout` - Stream start timeout in seconds (default: 15)
+
+**Cache Settings**
+- `cache.max_entries` - Maximum cached segments (default: 200)
+- `cache.max_segment_size` - Max segment size in bytes (default: 10MB)
+- `cache.ttl_seconds` - Cache TTL in seconds (default: 300)
+
+**Viewer Tracking**
+- `viewer.tracking_enabled` - Enable viewer tracking (default: true)
+- `viewer.timeout_seconds` - Viewer timeout in seconds (default: 30)
+
+**Elasticsearch (Optional)**
+- `elasticsearch.enabled` - Enable metrics indexing (default: false)
+- `elasticsearch.url` - Elasticsearch URL (default: http://localhost:9200)
+- `elasticsearch.index_prefix` - Index prefix (default: cascade-metrics)
 
 ## API Endpoints
 

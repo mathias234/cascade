@@ -29,6 +29,10 @@ cargo fmt
 
 ### Docker/Production
 ```bash
+# Copy and configure settings
+cp config.toml.example config.toml
+# Edit config.toml with your settings
+
 # Build and run with Docker Compose
 docker-compose up --build
 
@@ -80,17 +84,19 @@ docker-compose logs -f cascade
 - `GET /health` - Health check with stream capacity info and total viewer count
 - `GET /status` - Detailed status of all streams including viewer counts per stream
 
-### Environment Configuration
+### Configuration
 
-Key environment variables (set in .env file):
-- `SOURCE_HOST` - RTMP source server hostname
-- `SOURCE_PORT` - RTMP port (default: 1935)
-- `HLS_PATH` - Directory for HLS output (default: /hls)
-- `MAX_CONCURRENT_STREAMS` - Stream limit (default: 50)
-- `STREAM_TIMEOUT` - Idle stream timeout in seconds
-- `PORT` - HTTP server port (default: 8080)
-- `VIEWER_TRACKING_ENABLED` - Enable viewer tracking (default: true)
-- `VIEWER_TIMEOUT_SECONDS` - Seconds before marking viewer inactive (default: 30)
+The application uses a `config.toml` file for all configuration. See `config.toml.example` for the complete configuration template.
+
+Key configuration sections in `config.toml`:
+- `[server]` - HTTP server settings (port, hls_path)
+- `[rtmp]` - RTMP source settings (source_host, source_port)
+- `[stream]` - Stream management (max_concurrent_streams, timeouts)
+- `[cache]` - Caching configuration (max_entries, ttl_seconds)
+- `[viewer]` - Viewer tracking settings
+- `[elasticsearch]` - Elasticsearch integration for metrics
+- `[abr]` - Adaptive bitrate streaming configuration
+- `[ssl]` - SSL/TLS configuration (optional)
 
 ### FFmpeg Process Management
 

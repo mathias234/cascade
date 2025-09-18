@@ -1,5 +1,6 @@
 use crate::cache::SegmentCache;
 use crate::config::Config;
+use crate::elasticsearch::ElasticsearchClient;
 use crate::metrics::MetricsHistory;
 use crate::models::{Stats, StreamInfo};
 use crate::sessions::SessionManager;
@@ -35,6 +36,7 @@ pub struct StreamManager {
     pub session_manager: SessionManager,
     pub server_started_at: DateTime<Utc>,
     pub metrics_history: MetricsHistory,
+    pub elasticsearch: ElasticsearchClient,
     // FFmpeg configuration
     pub ffmpeg_hls_time: u32,
     pub ffmpeg_hls_list_size: u32,
@@ -74,6 +76,8 @@ impl StreamManager {
             ffmpeg_hls_time, ffmpeg_hls_list_size, ffmpeg_rw_timeout
         );
 
+        let elasticsearch = ElasticsearchClient::new(&config.elasticsearch)?;
+
         Ok(StreamManager {
             srs_host,
             srs_port,
@@ -89,6 +93,7 @@ impl StreamManager {
             session_manager: SessionManager::new(config.clone()),
             server_started_at: Utc::now(),
             metrics_history: MetricsHistory::new(),
+            elasticsearch,
             ffmpeg_hls_time,
             ffmpeg_hls_list_size,
             ffmpeg_rw_timeout,
@@ -99,6 +104,12 @@ impl StreamManager {
     pub async fn init(&self) -> Result<()> {
         fs::create_dir_all(&self.hls_path).await?;
         self.cleanup_all_streams().await?;
+
+        // Initialize Elasticsearch index template
+        if let Err(e) = self.elasticsearch.create_index_template().await {
+            warn!("Failed to create Elasticsearch index template: {}", e);
+        }
+
         Ok(())
     }
 
@@ -580,6 +591,9 @@ impl StreamManager {
 
     pub async fn graceful_shutdown(&self) {
         info!("Starting graceful shutdown...");
+
+        // Flush any pending Elasticsearch metrics
+        self.elasticsearch.flush().await;
 
         self.pending_streams.clear();
 
