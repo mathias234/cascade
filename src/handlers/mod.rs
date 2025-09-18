@@ -1,6 +1,93 @@
+pub mod api;
+pub mod common;
+pub mod playlist;
+pub mod segment;
+
+use crate::manager::StreamManager;
+use axum::{
+    body::Body,
+    extract::{Path, Query, Request},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use common::{ContextQuery, HlsRequestType, ensure_stream_ready, parse_hls_request};
+use std::sync::Arc;
+use tracing::{debug, error};
+
+// Re-export commonly used items
+pub use api::{dashboard, health_check, status};
+
+/// Main HLS content handler that routes based on path pattern
+pub async fn serve_hls_content(
+    Path(path): Path<String>,
+    Query(query): Query<ContextQuery>,
+    _req: Request,
+    manager: Arc<StreamManager>,
+) -> impl IntoResponse {
+    debug!(
+        "HLS request for path: {} with context: {:?}",
+        path, query.hls_ctx
+    );
+
+    // Parse the request into a structured type
+    let request = match parse_hls_request(&path, query.hls_ctx.clone()) {
+        Ok(req) => req,
+        Err(err) => {
+            error!("Failed to parse HLS request for path '{}': {}", path, err);
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(err))
+                .unwrap();
+        }
+    };
+
+    // Route based on request type
+    match request {
+        HlsRequestType::InitialRequest { stream_key } => {
+            // Create session and redirect to appropriate playlist
+            playlist::handle_initial_request_with_session(&stream_key, manager).await
+        }
+
+        HlsRequestType::Playlist {
+            stream_key,
+            playlist_path,
+            session,
+            needs_url_rewrite
+        } => {
+            // Ensure stream is ready
+            if !ensure_stream_ready(&stream_key, &manager).await {
+                if manager.failed_streams.contains_key(&stream_key) {
+                    return Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Body::from("Stream not found"))
+                        .unwrap();
+                }
+                return Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header("Retry-After", "5")
+                    .body(Body::from("Stream not available"))
+                    .unwrap();
+            }
+
+            // Track session if provided
+            if let Some(sid) = &session {
+                manager.session_manager.update_session(sid);
+            }
+
+            // Serve the playlist
+            playlist::serve_playlist(&stream_key, playlist_path, needs_url_rewrite, manager).await
+        }
+
+        HlsRequestType::Segment { stream_key, segment_path } => {
+            // Serve the segment
+            segment::serve_segment_file(&stream_key, segment_path, manager).await
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::handlers::{parse_hls_request, rewrite_playlist_urls, HlsRequestType};
+    use super::common::*;
     use std::path::PathBuf;
 
     #[test]
