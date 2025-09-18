@@ -30,7 +30,6 @@ A high-performance HLS (HTTP Live Streaming) edge server built in Rust. Cascade 
 
 Build and run locally:
 ```bash
-cd cascade
 cargo build --release
 cargo run
 ```

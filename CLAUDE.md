@@ -11,20 +11,20 @@ Cascade is a high-performance HLS (HTTP Live Streaming) edge server built in Rus
 ### Development
 ```bash
 # Build the Rust application
-cd cascade && cargo build
+cargo build
 
 # Run in development mode
-cd cascade && cargo run
+cargo run
 
 # Run tests
-cd cascade && cargo test
+cargo test
 
 # Check code (linting and type checking)
-cd cascade && cargo check
-cd cascade && cargo clippy
+cargo check
+cade && cargo clippy
 
 # Format code
-cd cascade && cargo fmt
+cargo fmt
 ```
 
 ### Docker/Production

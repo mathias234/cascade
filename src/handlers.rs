@@ -8,8 +8,8 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Deserialize;
+use std::path::PathBuf;
 use std::sync::{Arc, atomic::Ordering};
-use tracing::warn;
 use tracing::{debug, error, info};
 
 #[derive(Debug, Deserialize)]
@@ -17,117 +17,225 @@ pub struct ContextQuery {
     hls_ctx: Option<String>,
 }
 
-/// Main HLS content handler that routes based on path pattern
-pub async fn serve_hls_content(
-    Path(path): Path<String>,
-    Query(query): Query<ContextQuery>,
-    _req: Request,
-    manager: Arc<StreamManager>,
-) -> impl IntoResponse {
-    debug!(
-        "HLS request for path: {} with context: {:?}",
-        path, query.hls_ctx
-    );
+/// Represents different types of HLS requests
+#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
+pub(crate) enum HlsRequestType {
+    /// Initial request without session - needs redirect for viewer tracking
+    InitialRequest {
+        stream_key: String,
+    },
 
-    // Parse the path to determine what's being requested
-    let parts: Vec<&str> = path.split('/').collect();
+    /// Playlist request (master.m3u8, index.m3u8, or variant/index.m3u8)
+    Playlist {
+        stream_key: String,
+        playlist_path: PathBuf,
+        session: Option<String>,
+        needs_url_rewrite: bool,
+    },
 
-    if path.ends_with(".m3u8") {
-        // Playlist request
-        match parts.len() {
-            2 => {
-                // Format: stream_key/file.m3u8
-                let stream_key = parts[0];
-                let filename = parts[1];
+    /// Segment request (.ts files)
+    Segment {
+        stream_key: String,
+        segment_path: PathBuf,
+    },
+}
 
-                if filename == "master.m3u8" {
+/// Parse the incoming path into a structured HLS request type
+pub(crate) fn parse_hls_request(path: &str, session: Option<String>) -> Result<HlsRequestType, &'static str> {
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    if parts.is_empty() {
+        return Err("Invalid path");
+    }
+
+    let stream_key = parts[0];
+
+    // Handle different path patterns
+    match parts.len() {
+        1 => {
+            // Just stream_key - shouldn't happen with our routing
+            Err("Invalid path format")
+        }
+        2 => {
+            let filename = parts[1];
+
+            if filename.ends_with(".m3u8") {
+                // Could be master.m3u8 or index.m3u8
+                if filename == "index.m3u8" && session.is_none() {
+                    // Initial request without session - need redirect
+                    Ok(HlsRequestType::InitialRequest {
+                        stream_key: stream_key.to_string(),
+                    })
+                } else if filename == "master.m3u8" {
                     // ABR master playlist
-                    serve_abr_master_playlist(stream_key, manager).await
+                    Ok(HlsRequestType::Playlist {
+                        stream_key: stream_key.to_string(),
+                        playlist_path: PathBuf::from(filename),
+                        session,
+                        needs_url_rewrite: false, // ABR master doesn't need URL rewriting
+                    })
                 } else if filename == "index.m3u8" {
-                    // Single bitrate or legacy format
-                    if query.hls_ctx.is_none() {
-                        // No context - serve with redirect for session tracking
-                        serve_master_playlist(stream_key, manager).await
-                    } else {
-                        // Has context - serve actual playlist and track session
-                        serve_actual_playlist(stream_key, query.hls_ctx, manager).await
-                    }
+                    // Single bitrate playlist with session
+                    Ok(HlsRequestType::Playlist {
+                        stream_key: stream_key.to_string(),
+                        playlist_path: PathBuf::from(filename),
+                        session,
+                        needs_url_rewrite: true, // Single bitrate needs URL rewriting
+                    })
                 } else {
-                    Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(Body::from("Unknown playlist file"))
-                        .unwrap()
+                    Err("Unknown playlist file")
                 }
+            } else if filename.ends_with(".ts") {
+                // Single bitrate segment
+                Ok(HlsRequestType::Segment {
+                    stream_key: stream_key.to_string(),
+                    segment_path: PathBuf::from(filename),
+                })
+            } else {
+                Err("Invalid file type")
             }
-            3 => {
-                // Format: stream_key/variant/index.m3u8
-                let stream_key = parts[0];
-                let variant = parts[1];
-                let filename = parts[2];
+        }
+        3 => {
+            let variant = parts[1];
+            let filename = parts[2];
 
-                if filename == "index.m3u8" {
-                    // Serve variant playlist
-                    serve_variant_playlist(stream_key, variant, manager).await
-                } else {
-                    Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(Body::from("Invalid variant playlist path"))
-                        .unwrap()
-                }
+            if filename == "index.m3u8" {
+                // Variant playlist
+                Ok(HlsRequestType::Playlist {
+                    stream_key: stream_key.to_string(),
+                    playlist_path: PathBuf::from(format!("{}/{}", variant, filename)),
+                    session,
+                    needs_url_rewrite: false, // Variant playlists served as-is
+                })
+            } else if filename.ends_with(".ts") {
+                // Variant segment
+                Ok(HlsRequestType::Segment {
+                    stream_key: stream_key.to_string(),
+                    segment_path: PathBuf::from(format!("{}/{}", variant, filename)),
+                })
+            } else {
+                Err("Invalid variant file")
             }
-            _ => Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from("Invalid playlist path"))
-                .unwrap(),
         }
-    } else if path.ends_with(".ts") {
-        // Segment file
-        match parts.len() {
-            2 => {
-                // Format: stream_key/segment.ts (single bitrate)
-                let stream_key = parts[0];
-                let segment = parts[1];
-                serve_segment(stream_key, segment, manager).await
-            }
-            3 => {
-                // Format: stream_key/variant/segment.ts (ABR)
-                let stream_key = parts[0];
-                let variant = parts[1];
-                let segment = parts[2];
-                serve_variant_segment(stream_key, variant, segment, manager).await
-            }
-            _ => Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from("Invalid segment path"))
-                .unwrap(),
-        }
-    } else {
-        Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::from("Invalid file type"))
-            .unwrap()
+        _ => Err("Invalid path depth")
     }
 }
 
-/// Serve master playlist that redirects to actual playlist with context
-async fn serve_master_playlist(stream_key: &str, manager: Arc<StreamManager>) -> Response<Body> {
-    debug!(
-        "Master playlist request for stream: {} (no context)",
-        stream_key
-    );
-
-    // Ensure stream is started
+/// Ensure a stream is ready for serving
+async fn ensure_stream_ready(stream_key: &str, manager: &Arc<StreamManager>) -> bool {
+    // Wait for stream to be ready, starting it if necessary
     if !manager.wait_for_stream(stream_key.to_string()).await {
         // Check if stream failed (RTMP source doesn't exist)
         if manager.failed_streams.contains_key(stream_key) {
             info!("Stream {} failed - RTMP source not found", stream_key);
+            return false;
+        }
+        // Stream couldn't start for other reasons
+        return false;
+    }
+    true
+}
+
+/// Rewrite playlist URLs to include the stream key prefix
+pub(crate) fn rewrite_playlist_urls(content: &str, stream_key: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            if line.ends_with(".ts") {
+                // This is a segment filename, prepend the path
+                format!("/live/{}/{}", stream_key, line)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Track request statistics
+fn track_request_stats(manager: &Arc<StreamManager>, bytes_served: usize) {
+    manager.stats.requests.fetch_add(1, Ordering::Relaxed);
+    manager.stats.bytes_served.fetch_add(bytes_served as u64, Ordering::Relaxed);
+}
+
+/// Unified function to serve playlist files from disk
+async fn serve_playlist(
+    stream_key: &str,
+    playlist_path: PathBuf,
+    needs_url_rewrite: bool,
+    manager: Arc<StreamManager>,
+) -> Response<Body> {
+    debug!(
+        "Serving playlist for stream: {}, path: {:?}, rewrite: {}",
+        stream_key, playlist_path, needs_url_rewrite
+    );
+
+    // Update stream access
+    manager.update_stream_access(stream_key).await;
+
+    // Build the full file path
+    let file_path = manager.hls_path.join(stream_key).join(&playlist_path);
+
+    // Read the playlist file
+    match tokio::fs::read_to_string(&file_path).await {
+        Ok(content) => {
+            // Optionally rewrite URLs in the playlist
+            let final_content = if needs_url_rewrite {
+                rewrite_playlist_urls(&content, stream_key)
+            } else {
+                content
+            };
+
+            let content_size = final_content.len();
+            debug!(
+                "Serving playlist {} ({} bytes)",
+                playlist_path.display(),
+                content_size
+            );
+
+            // Track stats
+            manager.stats.playlists_served.fetch_add(1, Ordering::Relaxed);
+            track_request_stats(&manager, content_size);
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
+                .header(header::CACHE_CONTROL, "no-cache")
+                .body(Body::from(final_content))
+                .unwrap()
+        }
+        Err(e) => {
+            error!(
+                "Failed to read playlist file {:?}: {}",
+                file_path, e
+            );
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Playlist not found"))
+                .unwrap()
+        }
+    }
+}
+
+/// Handle initial request and create session for viewer tracking
+async fn handle_initial_request_with_session(
+    stream_key: &str,
+    manager: Arc<StreamManager>,
+) -> Response<Body> {
+    debug!(
+        "Initial request for stream: {} (creating session)",
+        stream_key
+    );
+
+    // Ensure stream is started
+    if !ensure_stream_ready(stream_key, &manager).await {
+        if manager.failed_streams.contains_key(stream_key) {
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::from("Stream not found"))
                 .unwrap();
         }
-
-        // Stream couldn't start for other reasons
         return Response::builder()
             .status(StatusCode::SERVICE_UNAVAILABLE)
             .header("Retry-After", "5")
@@ -136,7 +244,7 @@ async fn serve_master_playlist(stream_key: &str, manager: Arc<StreamManager>) ->
     }
 
     // Update stats
-    manager.stats.requests.fetch_add(1, Ordering::Relaxed);
+    track_request_stats(&manager, 0);
 
     // Generate a new session for this viewer
     let session_id = manager.session_manager.create_session(stream_key);
@@ -151,8 +259,8 @@ async fn serve_master_playlist(stream_key: &str, manager: Arc<StreamManager>) ->
         format!("/live/{}/index.m3u8?hls_ctx={}", stream_key, session_id)
     };
 
-    // Generate master playlist with redirect
-    let master_playlist = format!(
+    // Generate redirect playlist
+    let redirect_playlist = format!(
         "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,AVERAGE-BANDWIDTH=1\n{}",
         redirect_path
     );
@@ -161,98 +269,23 @@ async fn serve_master_playlist(stream_key: &str, manager: Arc<StreamManager>) ->
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
         .header(header::CACHE_CONTROL, "no-cache")
-        .body(Body::from(master_playlist))
+        .body(Body::from(redirect_playlist))
         .unwrap()
 }
 
-/// Serve actual playlist with context tracking
-async fn serve_actual_playlist(
+/// Unified function to serve segment files
+async fn serve_segment_file(
     stream_key: &str,
-    session_id: Option<String>,
+    segment_path: PathBuf,
     manager: Arc<StreamManager>,
 ) -> Response<Body> {
     debug!(
-        "Actual playlist request for stream: {} with session: {:?}",
-        stream_key, session_id
-    );
-
-    // Update session if context provided
-    if let Some(sid) = &session_id {
-        manager.session_manager.update_session(sid);
-    }
-
-    // Update stats and stream access
-    manager.stats.requests.fetch_add(1, Ordering::Relaxed);
-    manager.update_stream_access(stream_key).await;
-
-    // Read the actual playlist file generated by FFmpeg
-    let playlist_path = manager.hls_path.join(stream_key).join("index.m3u8");
-
-    match tokio::fs::read(&playlist_path).await {
-        Ok(data) => {
-            // Convert the playlist content to string to modify segment URLs
-            let content = String::from_utf8_lossy(&data);
-
-            // Add the stream_key prefix to segment URLs in the playlist
-            let modified_content = content
-                .lines()
-                .map(|line| {
-                    if line.ends_with(".ts") {
-                        // This is a segment filename, prepend the path
-                        format!("/live/{}/{}", stream_key, line)
-                    } else {
-                        line.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            let content_size = modified_content.len();
-            debug!(
-                "Serving playlist for stream {} ({} bytes)",
-                stream_key, content_size
-            );
-
-            // Track stats
-            manager
-                .stats
-                .playlists_served
-                .fetch_add(1, Ordering::Relaxed);
-            manager
-                .stats
-                .bytes_served
-                .fetch_add(content_size as u64, Ordering::Relaxed);
-
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
-                .header(header::CACHE_CONTROL, "no-cache")
-                .body(Body::from(modified_content))
-                .unwrap()
-        }
-        Err(e) => {
-            error!("Failed to read playlist file {:?}: {}", playlist_path, e);
-            Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from("Playlist not found"))
-                .unwrap()
-        }
-    }
-}
-
-/// Serve segment files
-async fn serve_segment(
-    stream_key: &str,
-    segment: &str,
-    manager: Arc<StreamManager>,
-) -> Response<Body> {
-    debug!(
-        "Segment request for stream: {}, segment: {}",
-        stream_key, segment
+        "Segment request for stream: {}, path: {:?}",
+        stream_key, segment_path
     );
 
     // Update stats
-    manager.stats.requests.fetch_add(1, Ordering::Relaxed);
+    track_request_stats(&manager, 0); // Will update with actual size later
 
     // Update stream access asynchronously (fire and forget)
     let manager_clone = manager.clone();
@@ -262,28 +295,22 @@ async fn serve_segment(
     });
 
     // Build the segment file path
-    let segment_path = manager.hls_path.join(stream_key).join(segment);
+    let file_path = manager.hls_path.join(stream_key).join(&segment_path);
 
     // Use cache for segments
-    let cache_key = format!("{}/{}", stream_key, segment);
-    match manager.cache.get_or_load(&cache_key, &segment_path).await {
+    let cache_key = format!("{}/{}", stream_key, segment_path.display());
+    match manager.cache.get_or_load(&cache_key, &file_path).await {
         Ok(Some((cached_segment, was_cached))) => {
             let data_size = cached_segment.data.len();
             if was_cached {
-                debug!("Cache hit: {} ({} bytes)", segment, data_size);
+                debug!("Cache hit: {:?} ({} bytes)", segment_path, data_size);
             } else {
-                info!("Cache miss: {} ({} bytes)", segment, data_size);
+                info!("Cache miss: {:?} ({} bytes)", segment_path, data_size);
             }
 
             // Track stats
-            manager
-                .stats
-                .segments_served
-                .fetch_add(1, Ordering::Relaxed);
-            manager
-                .stats
-                .bytes_served
-                .fetch_add(data_size as u64, Ordering::Relaxed);
+            manager.stats.segments_served.fetch_add(1, Ordering::Relaxed);
+            manager.stats.bytes_served.fetch_add(data_size as u64, Ordering::Relaxed);
 
             Response::builder()
                 .status(StatusCode::OK)
@@ -293,18 +320,86 @@ async fn serve_segment(
                 .unwrap()
         }
         Ok(None) => {
-            error!("Segment not found: {} at path {:?}", segment, segment_path);
+            error!("Segment not found: {:?} at path {:?}", segment_path, file_path);
             Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::from("Segment not found"))
                 .unwrap()
         }
         Err(e) => {
-            error!("Error serving segment {}: {}", segment, e);
+            error!("Error serving segment {:?}: {}", segment_path, e);
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::from("Internal server error"))
                 .unwrap()
+        }
+    }
+}
+
+/// Main HLS content handler that routes based on path pattern
+pub async fn serve_hls_content(
+    Path(path): Path<String>,
+    Query(query): Query<ContextQuery>,
+    _req: Request,
+    manager: Arc<StreamManager>,
+) -> impl IntoResponse {
+    debug!(
+        "HLS request for path: {} with context: {:?}",
+        path, query.hls_ctx
+    );
+
+    // Parse the request into a structured type
+    let request = match parse_hls_request(&path, query.hls_ctx.clone()) {
+        Ok(req) => req,
+        Err(err) => {
+            error!("Failed to parse HLS request for path '{}': {}", path, err);
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(err))
+                .unwrap();
+        }
+    };
+
+    // Route based on request type
+    match request {
+        HlsRequestType::InitialRequest { stream_key } => {
+            // Create session and redirect to appropriate playlist
+            handle_initial_request_with_session(&stream_key, manager).await
+        }
+
+        HlsRequestType::Playlist {
+            stream_key,
+            playlist_path,
+            session,
+            needs_url_rewrite
+        } => {
+            // Ensure stream is ready
+            if !ensure_stream_ready(&stream_key, &manager).await {
+                if manager.failed_streams.contains_key(&stream_key) {
+                    return Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Body::from("Stream not found"))
+                        .unwrap();
+                }
+                return Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .header("Retry-After", "5")
+                    .body(Body::from("Stream not available"))
+                    .unwrap();
+            }
+
+            // Track session if provided
+            if let Some(sid) = &session {
+                manager.session_manager.update_session(sid);
+            }
+
+            // Serve the playlist
+            serve_playlist(&stream_key, playlist_path, needs_url_rewrite, manager).await
+        }
+
+        HlsRequestType::Segment { stream_key, segment_path } => {
+            // Serve the segment
+            serve_segment_file(&stream_key, segment_path, manager).await
         }
     }
 }
@@ -420,169 +515,6 @@ pub async fn dashboard() -> impl IntoResponse {
     (StatusCode::INTERNAL_SERVER_ERROR, "Dashboard not available").into_response()
 }
 
-/// Serve ABR master playlist
-async fn serve_abr_master_playlist(
-    stream_key: &str,
-    manager: Arc<StreamManager>,
-) -> Response<Body> {
-    debug!("ABR master playlist request for stream: {}", stream_key);
-
-    // Update stream access for viewer tracking
-    manager.update_stream_access(stream_key).await;
-
-    // Track session if context is provided (viewer tracking)
-    // The context would have been set by the initial redirect from index.m3u8
-
-    // Check if stream exists
-    if !manager.active_streams.contains_key(stream_key) {
-        // Try to start the stream
-        match manager.start_stream(stream_key.to_string()).await {
-            Ok(started) => {
-                if !started {
-                    return Response::builder()
-                        .status(StatusCode::SERVICE_UNAVAILABLE)
-                        .body(Body::from("Stream not available"))
-                        .unwrap();
-                }
-            }
-            Err(_) => {
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from("Failed to start stream"))
-                    .unwrap();
-            }
-        }
-    }
-
-    // Path to master playlist
-    let master_path = manager.hls_path.join(stream_key).join("master.m3u8");
-
-    // Read and serve the master playlist
-    match tokio::fs::read_to_string(&master_path).await {
-        Ok(content) => Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "application/vnd.apple.mpegurl")
-            .header("Cache-Control", "no-cache")
-            .body(Body::from(content))
-            .unwrap(),
-        Err(e) => {
-            error!("Failed to read master playlist for {}: {}", stream_key, e);
-            Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from("Master playlist not found"))
-                .unwrap()
-        }
-    }
-}
-
-/// Serve variant-specific playlist
-async fn serve_variant_playlist(
-    stream_key: &str,
-    variant: &str,
-    manager: Arc<StreamManager>,
-) -> Response<Body> {
-    debug!(
-        "Variant playlist request for stream: {}, variant: {}",
-        stream_key, variant
-    );
-
-    // Update access time
-    manager.update_stream_access(stream_key).await;
-
-    // Path to variant playlist
-    let playlist_path = manager
-        .hls_path
-        .join(stream_key)
-        .join(variant)
-        .join("index.m3u8");
-
-    // Read and serve the playlist (no caching for playlists)
-    match tokio::fs::read_to_string(&playlist_path).await {
-        Ok(content) => Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "application/vnd.apple.mpegurl")
-            .header("Cache-Control", "no-cache")
-            .body(Body::from(content))
-            .unwrap(),
-        Err(e) => {
-            error!(
-                "Failed to read variant playlist for {}/{}: {}",
-                stream_key, variant, e
-            );
-            Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from("Variant playlist not found"))
-                .unwrap()
-        }
-    }
-}
-
-/// Serve variant-specific segment
-async fn serve_variant_segment(
-    stream_key: &str,
-    variant: &str,
-    segment: &str,
-    manager: Arc<StreamManager>,
-) -> Response<Body> {
-    debug!(
-        "Variant segment request: {}/{}/{}",
-        stream_key, variant, segment
-    );
-
-    // Update access time
-    manager.update_stream_access(stream_key).await;
-
-    // Build the segment file path
-    let segment_path = manager
-        .hls_path
-        .join(stream_key)
-        .join(variant)
-        .join(segment);
-
-    // Use cache for segments
-    let cache_key = format!("{}/{}/{}", stream_key, variant, segment);
-    match manager.cache.get_or_load(&cache_key, &segment_path).await {
-        Ok(Some((cached_segment, was_cached))) => {
-            let data_size = cached_segment.data.len();
-            if was_cached {
-                debug!("Cache hit: {}/{} ({} bytes)", variant, segment, data_size);
-            } else {
-                info!("Cache miss: {}/{} ({} bytes)", variant, segment, data_size);
-            }
-
-            manager
-                .stats
-                .bytes_served
-                .fetch_add(data_size as u64, std::sync::atomic::Ordering::Relaxed);
-            manager
-                .stats
-                .segments_served
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "video/mp2t")
-                .header("Content-Length", data_size.to_string())
-                .header("Cache-Control", "public, max-age=31536000")
-                .body(Body::from(cached_segment.data))
-                .unwrap()
-        }
-        Ok(None) => {
-            warn!("Segment not found: {}/{}/{}", stream_key, variant, segment);
-            Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from("Segment not found"))
-                .unwrap()
-        }
-        Err(e) => {
-            error!(
-                "Failed to load segment {}/{}/{}: {}",
-                stream_key, variant, segment, e
-            );
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from("Failed to load segment"))
-                .unwrap()
-        }
-    }
-}
+#[cfg(test)]
+#[path = "handlers_test.rs"]
+mod handlers_test;
