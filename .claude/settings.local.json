@@ -4,7 +4,8 @@
       "WebSearch",
       "Bash(cargo test:*)",
       "Bash(cargo fmt:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "mcp__context7__get-library-docs"
     ],
     "deny": [],
     "ask": []

@@ -31,7 +31,7 @@ pub struct StreamManager {
     pub pending_streams: Arc<DashMap<String, DateTime<Utc>>>,
     pub stats: Arc<Stats>,
     pub cache: SegmentCache,
-    pub session_manager: SessionManager,
+    pub session_manager: Arc<SessionManager>,
     pub server_started_at: DateTime<Utc>,
     pub metrics_history: MetricsHistory,
     pub elasticsearch: ElasticsearchClient,
@@ -87,7 +87,7 @@ impl StreamManager {
             pending_streams: Arc::new(DashMap::new()),
             stats: Arc::new(Stats::new()),
             cache: SegmentCache::new(cache_entries, max_segment_size, cache_ttl_seconds),
-            session_manager: SessionManager::new(config.clone()),
+            session_manager: Arc::new(SessionManager::new(config.clone())),
             server_started_at: Utc::now(),
             metrics_history: MetricsHistory::new(),
             elasticsearch,
@@ -307,44 +307,20 @@ impl StreamManager {
 
         debug!("Created FFmpeg context for stream: {}", stream_key);
 
-        // Create a scheduler and start the FFmpeg job in a separate task
-        let stream_key_clone = stream_key.clone();
-        let active_streams_clone = self.active_streams.clone();
-        let pending_streams_clone = self.pending_streams.clone();
-        let stats_clone = self.stats.clone();
-
-        let handle = tokio::spawn(async move {
-            info!("Starting FFmpeg scheduler for stream: {}", stream_key_clone);
-
-            let scheduler = FfmpegScheduler::new(context);
-            match scheduler.start() {
-                Ok(job) => {
-                    // Wait for the job to complete
-                    match job.wait() {
-                        Ok(_) => {
-                            info!("FFmpeg job completed for stream: {}", stream_key_clone);
-                        }
-                        Err(e) => {
-                            error!("FFmpeg job failed for stream {}: {}", stream_key_clone, e);
-
-                            // Remove from active streams
-                            active_streams_clone.remove(&stream_key_clone);
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to start FFmpeg scheduler for stream {}: {}", stream_key_clone, e);
-
-                    // Remove from pending
-                    pending_streams_clone.remove(&stream_key_clone);
-
-                    stats_clone.failed.fetch_add(1, Ordering::Relaxed);
-                }
+        // Create and start the FFmpeg scheduler
+        let scheduler = FfmpegScheduler::new(context);
+        let running_scheduler = match scheduler.start() {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to start FFmpeg scheduler for stream {}: {}", stream_key, e);
+                self.pending_streams.remove(&stream_key);
+                self.stats.failed.fetch_add(1, Ordering::Relaxed);
+                return Ok(false);
             }
-        });
+        };
 
         let stream_info = StreamInfo {
-            scheduler_handle: Arc::new(Mutex::new(handle)),
+            scheduler_handle: Arc::new(Mutex::new(Some(running_scheduler))),
             started_at: Utc::now(),
             last_accessed: Arc::new(RwLock::new(Utc::now())),
         };
@@ -354,6 +330,60 @@ impl StreamManager {
         self.stats.started.fetch_add(1, Ordering::Relaxed);
 
         info!("FFmpeg context started for stream: {}", stream_key);
+
+        // Spawn a task to monitor the FFmpeg job
+        let stream_key_monitor = stream_key.clone();
+        let active_streams_monitor = self.active_streams.clone();
+        let stats_monitor = self.stats.clone();
+        let session_manager_monitor = self.session_manager.clone();
+        let hls_path_monitor = self.hls_path.clone();
+
+        tokio::spawn(async move {
+            // Check periodically if the job has ended
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+
+                if let Some(stream_info) = active_streams_monitor.get(&stream_key_monitor) {
+                    let scheduler_lock = stream_info.scheduler_handle.lock().await;
+                    if let Some(ref scheduler) = *scheduler_lock {
+                        if scheduler.is_ended() {
+                            drop(scheduler_lock);
+                            drop(stream_info);
+
+                            // FFmpeg job ended (likely failed) - clean up everything
+                            error!("FFmpeg job ended unexpectedly for stream: {}", stream_key_monitor);
+
+                            // Remove from active streams
+                            active_streams_monitor.remove(&stream_key_monitor);
+
+                            // Update stats
+                            stats_monitor.failed.fetch_add(1, Ordering::Relaxed);
+
+                            // Clear sessions for this stream
+                            session_manager_monitor.clear_stream_sessions(&stream_key_monitor);
+
+                            // Clean up all stream files
+                            let stream_dir = hls_path_monitor.join(&stream_key_monitor);
+                            if stream_dir.exists() {
+                                if let Err(e) = fs::remove_dir_all(&stream_dir).await {
+                                    error!("Failed to clean up stream directory for {}: {}", stream_key_monitor, e);
+                                }
+                            }
+
+                            info!("Cleaned up failed stream {}, ready for restart", stream_key_monitor);
+                            break;
+                        }
+                    } else {
+                        // Scheduler was taken (stream was stopped gracefully)
+                        break;
+                    }
+                } else {
+                    // Stream was removed
+                    break;
+                }
+            }
+        });
+
         Ok(true)
     }
 
@@ -363,16 +393,25 @@ impl StreamManager {
         let stream_info = self.active_streams.remove(stream_key).map(|(_, v)| v);
 
         if let Some(info) = stream_info {
-            let handle = info.scheduler_handle.lock().await;
+            let mut scheduler_lock = info.scheduler_handle.lock().await;
 
-            // Abort the task to stop the FFmpeg scheduler
-            handle.abort();
+            // Take the scheduler out of the option and abort it
+            if let Some(scheduler) = scheduler_lock.take() {
+                // Abort the FFmpeg job
+                scheduler.abort();
+
+                // The abort() method consumes the scheduler and signals it to end
+                // No need to wait since abort() handles cleanup
+            }
 
             self.stats.stopped.fetch_add(1, Ordering::Relaxed);
         }
 
         // Clear sessions for this stream
         self.session_manager.clear_stream_sessions(stream_key);
+
+        // Add a small delay to ensure FFmpeg has released file handles
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
         self.cleanup_stream_files(stream_key).await?;
         Ok(())

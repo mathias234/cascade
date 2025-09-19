@@ -1,19 +1,18 @@
 use crate::cache::CacheStatsSnapshot;
 use crate::metrics::{MetricPoint, ThroughputMetrics};
 use chrono::{DateTime, Utc};
+use ez_ffmpeg::FfmpegScheduler;
+use ez_ffmpeg::core::scheduler::ffmpeg_scheduler::Running;
 use serde::Serialize;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
-use tokio::{
-    sync::{Mutex, RwLock},
-    task::JoinHandle,
-};
+use tokio::sync::{Mutex, RwLock};
 
 #[derive(Clone)]
 pub struct StreamInfo {
-    pub scheduler_handle: Arc<Mutex<JoinHandle<()>>>,
+    pub scheduler_handle: Arc<Mutex<Option<FfmpegScheduler<Running>>>>,
     pub started_at: DateTime<Utc>,
     pub last_accessed: Arc<RwLock<DateTime<Utc>>>,
 }
