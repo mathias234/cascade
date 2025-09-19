@@ -2,7 +2,6 @@ use crate::manager::StreamManager;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::{Arc, atomic::Ordering};
-use tracing::info;
 
 #[derive(Debug, Deserialize)]
 pub struct ContextQuery {
@@ -118,11 +117,6 @@ pub fn parse_hls_request(path: &str, session: Option<String>) -> Result<HlsReque
 pub async fn ensure_stream_ready(stream_key: &str, manager: &Arc<StreamManager>) -> bool {
     // Wait for stream to be ready, starting it if necessary
     if !manager.wait_for_stream(stream_key.to_string()).await {
-        // Check if stream failed (RTMP source doesn't exist)
-        if manager.failed_streams.contains_key(stream_key) {
-            info!("Stream {} failed - RTMP source not found", stream_key);
-            return false;
-        }
         // Stream couldn't start for other reasons
         return false;
     }

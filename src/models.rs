@@ -7,14 +7,13 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use tokio::{
-    process::Child,
     sync::{Mutex, RwLock},
+    task::JoinHandle,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StreamInfo {
-    pub pid: u32,
-    pub process: Arc<Mutex<Child>>,
+    pub scheduler_handle: Arc<Mutex<JoinHandle<()>>>,
     pub started_at: DateTime<Utc>,
     pub last_accessed: Arc<RwLock<DateTime<Utc>>>,
 }
@@ -22,7 +21,6 @@ pub struct StreamInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamStatus {
     pub key: String,
-    pub pid: u32,
     pub uptime: i64,
     pub last_accessed: i64,
     pub viewers: usize,
@@ -92,7 +90,6 @@ pub struct HealthResponse {
 pub struct StatusResponse {
     pub active_streams: Vec<StreamStatus>,
     pub pending_streams: Vec<String>,
-    pub failed_streams: Vec<String>,
     pub stats: StatsSnapshot,
     pub cache_stats: Option<CacheStatsSnapshot>,
     pub uptime_seconds: i64,

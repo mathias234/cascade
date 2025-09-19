@@ -42,8 +42,10 @@ async fn main() -> Result<()> {
     };
 
     // Initialize logging
+    // Build filter with base level and specific overrides for noisy crates
+    let filter = format!("{},ez_ffmpeg=warn", &config.logging.level);
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new(&config.logging.level))
+        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
         .init();
 
     let config = Arc::new(config);

@@ -56,12 +56,6 @@ pub async fn serve_hls_content(
         } => {
             // Ensure stream is ready
             if !ensure_stream_ready(&stream_key, &manager).await {
-                if manager.failed_streams.contains_key(&stream_key) {
-                    return Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(Body::from("Stream not found"))
-                        .unwrap();
-                }
                 return Response::builder()
                     .status(StatusCode::SERVICE_UNAVAILABLE)
                     .header("Retry-After", "5")

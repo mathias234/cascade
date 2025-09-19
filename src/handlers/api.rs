@@ -51,7 +51,6 @@ pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
 
         active_streams.push(StreamStatus {
             key: key.clone(),
-            pid: info.pid,
             uptime: now.signed_duration_since(info.started_at).num_seconds(),
             last_accessed: now.signed_duration_since(*last_accessed).num_seconds(),
             viewers: manager.session_manager.get_stream_viewer_count(key),
@@ -60,12 +59,6 @@ pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
 
     let pending_streams: Vec<String> = manager
         .pending_streams
-        .iter()
-        .map(|entry| entry.key().clone())
-        .collect();
-
-    let failed_streams: Vec<String> = manager
-        .failed_streams
         .iter()
         .map(|entry| entry.key().clone())
         .collect();
@@ -88,7 +81,6 @@ pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
     Json(StatusResponse {
         active_streams,
         pending_streams,
-        failed_streams,
         stats,
         cache_stats,
         uptime_seconds,

@@ -80,12 +80,6 @@ pub async fn handle_initial_request_with_session(
 
     // Ensure stream is started
     if !crate::handlers::common::ensure_stream_ready(stream_key, &manager).await {
-        if manager.failed_streams.contains_key(stream_key) {
-            return Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from("Stream not found"))
-                .unwrap();
-        }
         return Response::builder()
             .status(StatusCode::SERVICE_UNAVAILABLE)
             .header("Retry-After", "5")
