@@ -25,7 +25,7 @@ pub struct MetricsDocument {
     pub segments_per_second: f64,
     pub viewers: usize,
     pub cache_hit_rate: f64,
-    pub mbps: f64,
+    pub bits_per_second: f64,
 }
 
 #[derive(Debug)]
@@ -227,7 +227,7 @@ impl ElasticsearchClient {
                             "cache_hit_rate": {
                                 "type": "double"
                             },
-                            "mbps": {
+                            "bits_per_second": {
                                 "type": "double"
                             }
                         }

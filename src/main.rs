@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
 
     // Initialize logging
     // Build filter with base level and specific overrides for noisy crates
-    let filter = format!("{},ez_ffmpeg=warn", &config.logging.level);
+    let filter = format!("{},ez_ffmpeg=error", &config.logging.level);
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
         .init();
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
                     0.0
                 };
 
-                let mbps = bytes_per_second * 8.0 / 1_000_000.0;
+                let bits_per_second = bytes_per_second * 8.0;
 
                 // Get viewer count for this stream
                 let viewers = manager_metrics
@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
                     segments_per_second,
                     viewers,
                     cache_hit_rate,
-                    mbps,
+                    bits_per_second,
                 };
 
                 metrics_docs.push(metric_doc);

@@ -68,7 +68,7 @@ pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
             0.0
         };
 
-        let mbps = bytes_per_second * 8.0 / 1_000_000.0;
+        let bits_per_second = bytes_per_second * 8.0;
 
         active_streams.push(StreamStatus {
             key: key.clone(),
@@ -79,7 +79,7 @@ pub async fn status(manager: Arc<StreamManager>) -> impl IntoResponse {
             requests_per_second,
             segments_per_second,
             cache_hit_rate,
-            mbps,
+            bits_per_second,
         });
     }
 

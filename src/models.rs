@@ -33,7 +33,7 @@ pub struct StreamStatus {
     pub requests_per_second: f64,
     pub segments_per_second: f64,
     pub cache_hit_rate: f64,
-    pub mbps: f64,
+    pub bits_per_second: f64,
 }
 
 pub struct Stats {
