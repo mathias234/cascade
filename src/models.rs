@@ -1,5 +1,3 @@
-use crate::cache::CacheStatsSnapshot;
-use crate::metrics::{MetricPoint, ThroughputMetrics};
 use chrono::{DateTime, Utc};
 use ez_ffmpeg::FfmpegScheduler;
 use ez_ffmpeg::core::scheduler::ffmpeg_scheduler::Running;
@@ -15,6 +13,14 @@ pub struct StreamInfo {
     pub scheduler_handle: Arc<Mutex<Option<FfmpegScheduler<Running>>>>,
     pub started_at: DateTime<Utc>,
     pub last_accessed: Arc<RwLock<DateTime<Utc>>>,
+    // Per-stream metrics
+    pub bytes_served: Arc<AtomicU64>,
+    pub requests_served: Arc<AtomicU64>,
+    pub segments_served: Arc<AtomicU64>,
+    pub playlists_served: Arc<AtomicU64>,
+    pub cache_hits: Arc<AtomicU64>,
+    pub cache_misses: Arc<AtomicU64>,
+    pub last_metrics_timestamp: Arc<RwLock<DateTime<Utc>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -23,6 +29,11 @@ pub struct StreamStatus {
     pub uptime: i64,
     pub last_accessed: i64,
     pub viewers: usize,
+    pub bytes_per_second: f64,
+    pub requests_per_second: f64,
+    pub segments_per_second: f64,
+    pub cache_hit_rate: f64,
+    pub mbps: f64,
 }
 
 pub struct Stats {
@@ -82,16 +93,11 @@ pub struct HealthResponse {
     pub active_streams: usize,
     pub pending_streams: usize,
     pub max_streams: usize,
-    pub stats: StatsSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusResponse {
     pub active_streams: Vec<StreamStatus>,
     pub pending_streams: Vec<String>,
-    pub stats: StatsSnapshot,
-    pub cache_stats: Option<CacheStatsSnapshot>,
     pub uptime_seconds: i64,
-    pub throughput: ThroughputMetrics,
-    pub metrics_history: Vec<MetricPoint>,
 }

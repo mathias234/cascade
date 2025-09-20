@@ -3,7 +3,6 @@ mod config;
 mod elasticsearch;
 mod handlers;
 mod manager;
-mod metrics;
 mod models;
 mod sessions;
 
@@ -57,70 +56,82 @@ async fn main() -> Result<()> {
         manager_cleanup.cleanup_idle_streams().await;
     });
 
-    // Start metrics collection task
+    // Start per-stream metrics collection task
     let manager_metrics = manager.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(2));
         loop {
             interval.tick().await;
 
-            // Get current stats
-            let bytes = manager_metrics.stats.bytes_served.load(Ordering::Relaxed);
-            let requests = manager_metrics.stats.requests.load(Ordering::Relaxed);
-            let segments = manager_metrics
-                .stats
-                .segments_served
-                .load(Ordering::Relaxed);
-            let viewers = manager_metrics.session_manager.get_total_viewer_count();
-            let active_streams = manager_metrics.active_streams.len();
+            let now = chrono::Utc::now();
+            let mut metrics_docs = Vec::new();
 
-            // Get cache stats
-            let cache_stats = manager_metrics.cache.stats().await;
+            // Iterate through active streams and calculate per-stream metrics
+            for entry in manager_metrics.active_streams.iter() {
+                let stream_key = entry.key();
+                let stream_info = entry.value();
 
-            // Get per-stream viewer counts
-            let stream_viewers = manager_metrics.session_manager.get_all_stream_viewers();
+                // Get metrics since last timestamp
+                let mut last_timestamp = stream_info.last_metrics_timestamp.write().await;
+                let time_elapsed = now
+                    .signed_duration_since(*last_timestamp)
+                    .num_milliseconds() as f64
+                    / 1000.0;
 
-            // Record metrics point
-            manager_metrics
-                .metrics_history
-                .record_point(
-                    bytes,
-                    requests,
-                    segments,
+                if time_elapsed <= 0.0 {
+                    continue; // Skip if no time has elapsed
+                }
+
+                // Calculate per-second rates
+                let bytes = stream_info.bytes_served.swap(0, Ordering::Relaxed);
+                let requests = stream_info.requests_served.swap(0, Ordering::Relaxed);
+                let segments = stream_info.segments_served.swap(0, Ordering::Relaxed);
+                let cache_hits = stream_info.cache_hits.swap(0, Ordering::Relaxed);
+                let cache_misses = stream_info.cache_misses.swap(0, Ordering::Relaxed);
+
+                let bytes_per_second = bytes as f64 / time_elapsed;
+                let requests_per_second = requests as f64 / time_elapsed;
+                let segments_per_second = segments as f64 / time_elapsed;
+
+                let cache_hit_rate = if cache_hits + cache_misses > 0 {
+                    (cache_hits as f64 / (cache_hits + cache_misses) as f64) * 100.0
+                } else {
+                    0.0
+                };
+
+                let mbps = bytes_per_second * 8.0 / 1_000_000.0;
+
+                // Get viewer count for this stream
+                let viewers = manager_metrics
+                    .session_manager
+                    .get_stream_viewer_count(stream_key);
+
+                // Update last timestamp
+                *last_timestamp = now;
+
+                // Create metric document for this stream
+                let metric_doc = crate::elasticsearch::MetricsDocument {
+                    timestamp: now,
+                    server_name: String::new(), // Will be filled by ElasticsearchClient
+                    stream_name: stream_key.clone(),
+                    bytes_per_second,
+                    requests_per_second,
+                    segments_per_second,
                     viewers,
-                    active_streams,
-                    cache_stats.hits,
-                    cache_stats.misses,
-                    cache_stats.memory_bytes,
-                    cache_stats.total_entries,
-                    stream_viewers.clone(),
-                )
-                .await;
+                    cache_hit_rate,
+                    mbps,
+                };
 
-            // Index metrics to Elasticsearch
-            let throughput = manager_metrics.metrics_history.get_current_throughput().await;
-            let cache_hit_rate = if cache_stats.hits + cache_stats.misses > 0 {
-                (cache_stats.hits as f64 / (cache_stats.hits + cache_stats.misses) as f64) * 100.0
-            } else {
-                0.0
-            };
+                metrics_docs.push(metric_doc);
+            }
 
-            let metrics_doc = crate::elasticsearch::MetricsDocument {
-                timestamp: chrono::Utc::now(),
-                server_name: String::new(), // Will be filled by ElasticsearchClient
-                bytes_per_second: throughput.bytes_per_second,
-                requests_per_second: throughput.requests_per_second,
-                segments_per_second: throughput.segments_per_second,
-                viewers,
-                active_streams,
-                cache_hit_rate,
-                cache_memory_mb: cache_stats.memory_bytes as f64 / 1_048_576.0,
-                cache_entries: cache_stats.total_entries,
-                mbps: throughput.mbps,
-                stream_viewers,
-            };
-
-            manager_metrics.elasticsearch.index_metrics(metrics_doc).await;
+            // Send all metrics to Elasticsearch
+            if !metrics_docs.is_empty() {
+                manager_metrics
+                    .elasticsearch
+                    .index_metrics(metrics_docs)
+                    .await;
+            }
         }
     });
 

@@ -52,7 +52,7 @@ pub async fn serve_hls_content(
             stream_key,
             playlist_path,
             session,
-            needs_url_rewrite
+            needs_url_rewrite,
         } => {
             // Ensure stream is ready
             if !ensure_stream_ready(&stream_key, &manager).await {
@@ -72,7 +72,10 @@ pub async fn serve_hls_content(
             playlist::serve_playlist(&stream_key, playlist_path, needs_url_rewrite, manager).await
         }
 
-        HlsRequestType::Segment { stream_key, segment_path } => {
+        HlsRequestType::Segment {
+            stream_key,
+            segment_path,
+        } => {
             // Serve the segment
             segment::serve_segment_file(&stream_key, segment_path, manager).await
         }
@@ -105,7 +108,12 @@ mod tests {
         assert!(result.is_ok());
 
         match result.unwrap() {
-            HlsRequestType::Playlist { stream_key, playlist_path, session, needs_url_rewrite } => {
+            HlsRequestType::Playlist {
+                stream_key,
+                playlist_path,
+                session,
+                needs_url_rewrite,
+            } => {
                 assert_eq!(stream_key, "stream123");
                 assert_eq!(playlist_path, PathBuf::from("index.m3u8"));
                 assert_eq!(session, Some("session456".to_string()));
@@ -121,7 +129,12 @@ mod tests {
         assert!(result.is_ok());
 
         match result.unwrap() {
-            HlsRequestType::Playlist { stream_key, playlist_path, needs_url_rewrite, .. } => {
+            HlsRequestType::Playlist {
+                stream_key,
+                playlist_path,
+                needs_url_rewrite,
+                ..
+            } => {
                 assert_eq!(stream_key, "stream123");
                 assert_eq!(playlist_path, PathBuf::from("master.m3u8"));
                 assert!(!needs_url_rewrite); // ABR master doesn't need rewriting
@@ -136,7 +149,12 @@ mod tests {
         assert!(result.is_ok());
 
         match result.unwrap() {
-            HlsRequestType::Playlist { stream_key, playlist_path, needs_url_rewrite, .. } => {
+            HlsRequestType::Playlist {
+                stream_key,
+                playlist_path,
+                needs_url_rewrite,
+                ..
+            } => {
                 assert_eq!(stream_key, "stream123");
                 assert_eq!(playlist_path, PathBuf::from("720p/index.m3u8"));
                 assert!(!needs_url_rewrite); // Variant playlists served as-is
@@ -152,7 +170,10 @@ mod tests {
         assert!(result.is_ok());
 
         match result.unwrap() {
-            HlsRequestType::Segment { stream_key, segment_path } => {
+            HlsRequestType::Segment {
+                stream_key,
+                segment_path,
+            } => {
                 assert_eq!(stream_key, "stream123");
                 assert_eq!(segment_path, PathBuf::from("segment001.ts"));
             }
@@ -164,7 +185,10 @@ mod tests {
         assert!(result.is_ok());
 
         match result.unwrap() {
-            HlsRequestType::Segment { stream_key, segment_path } => {
+            HlsRequestType::Segment {
+                stream_key,
+                segment_path,
+            } => {
                 assert_eq!(stream_key, "stream123");
                 assert_eq!(segment_path, PathBuf::from("1080p/segment042.ts"));
             }

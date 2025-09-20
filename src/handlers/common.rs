@@ -1,7 +1,7 @@
 use crate::manager::StreamManager;
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
 pub struct ContextQuery {
@@ -13,9 +13,7 @@ pub struct ContextQuery {
 #[cfg_attr(test, derive(PartialEq))]
 pub enum HlsRequestType {
     /// Initial request without session - needs redirect for viewer tracking
-    InitialRequest {
-        stream_key: String,
-    },
+    InitialRequest { stream_key: String },
 
     /// Playlist request (master.m3u8, index.m3u8, or variant/index.m3u8)
     Playlist {
@@ -33,7 +31,10 @@ pub enum HlsRequestType {
 }
 
 /// Parse the incoming path into a structured HLS request type
-pub fn parse_hls_request(path: &str, session: Option<String>) -> Result<HlsRequestType, &'static str> {
+pub fn parse_hls_request(
+    path: &str,
+    session: Option<String>,
+) -> Result<HlsRequestType, &'static str> {
     let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
     if parts.is_empty() {
@@ -109,7 +110,7 @@ pub fn parse_hls_request(path: &str, session: Option<String>) -> Result<HlsReque
                 Err("Invalid variant file")
             }
         }
-        _ => Err("Invalid path depth")
+        _ => Err("Invalid path depth"),
     }
 }
 
@@ -137,10 +138,4 @@ pub fn rewrite_playlist_urls(content: &str, stream_key: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Track request statistics
-pub fn track_request_stats(manager: &Arc<StreamManager>, bytes_served: usize) {
-    manager.stats.requests.fetch_add(1, Ordering::Relaxed);
-    manager.stats.bytes_served.fetch_add(bytes_served as u64, Ordering::Relaxed);
 }

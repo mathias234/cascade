@@ -1,7 +1,6 @@
 use crate::cache::SegmentCache;
 use crate::config::Config;
 use crate::elasticsearch::ElasticsearchClient;
-use crate::metrics::MetricsHistory;
 use crate::models::{Stats, StreamInfo};
 use crate::sessions::SessionManager;
 use anyhow::Result;
@@ -10,7 +9,10 @@ use dashmap::DashMap;
 use ez_ffmpeg::{FfmpegContext, FfmpegScheduler, Input, Output};
 use std::{
     path::PathBuf,
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -33,7 +35,6 @@ pub struct StreamManager {
     pub cache: SegmentCache,
     pub session_manager: Arc<SessionManager>,
     pub server_started_at: DateTime<Utc>,
-    pub metrics_history: MetricsHistory,
     pub elasticsearch: ElasticsearchClient,
     // FFmpeg configuration
     pub ffmpeg_hls_time: u32,
@@ -89,7 +90,6 @@ impl StreamManager {
             cache: SegmentCache::new(cache_entries, max_segment_size, cache_ttl_seconds),
             session_manager: Arc::new(SessionManager::new(config.clone())),
             server_started_at: Utc::now(),
-            metrics_history: MetricsHistory::new(),
             elasticsearch,
             ffmpeg_hls_time,
             ffmpeg_hls_list_size,
@@ -173,117 +173,130 @@ impl StreamManager {
             ("probesize", "1M".to_string()),
         ];
 
-        let input = Input::from(rtmp_url.clone())
-            .set_input_opts(input_opts);
+        let input = Input::from(rtmp_url.clone()).set_input_opts(input_opts);
 
         // Build FFmpeg context with filter and output configuration
-        let (filter_desc, outputs) = if self.abr_config.enabled && !self.abr_config.variants.is_empty() {
-            // ABR mode: Generate multiple variants
-            info!(
-                "Starting ABR stream {} with {} variants",
-                stream_key,
-                self.abr_config.variants.len()
-            );
+        let (filter_desc, outputs) =
+            if self.abr_config.enabled && !self.abr_config.variants.is_empty() {
+                // ABR mode: Generate multiple variants
+                info!(
+                    "Starting ABR stream {} with {} variants",
+                    stream_key,
+                    self.abr_config.variants.len()
+                );
 
-            // Create directories for all variants
-            for variant in &self.abr_config.variants {
-                let variant_dir = stream_dir.join(&variant.name);
-                tokio::fs::create_dir_all(&variant_dir).await.ok();
-            }
+                // Create directories for all variants
+                for variant in &self.abr_config.variants {
+                    let variant_dir = stream_dir.join(&variant.name);
+                    tokio::fs::create_dir_all(&variant_dir).await.ok();
+                }
 
-            // Build filter complex with split and scale for each variant
-            let variant_count = self.abr_config.variants.len();
-            let mut filter_complex = format!("[0:v]split={}", variant_count);
+                // Build filter complex with split and scale for each variant
+                let variant_count = self.abr_config.variants.len();
+                let mut filter_complex = format!("[0:v]split={}", variant_count);
 
-            // Add labeled outputs for the split filter
-            for i in 0..variant_count {
-                filter_complex.push_str(&format!("[split{}]", i));
-            }
+                // Add labeled outputs for the split filter
+                for i in 0..variant_count {
+                    filter_complex.push_str(&format!("[split{}]", i));
+                }
 
-            // Add scaling filters for each variant with properly labeled outputs
-            for (i, variant) in self.abr_config.variants.iter().enumerate() {
-                filter_complex.push_str(&format!(
-                    ";[split{}]scale={}:{},fps={}[vout{}]",
-                    i, variant.width, variant.height, variant.framerate, i
-                ));
-            }
+                // Add scaling filters for each variant with properly labeled outputs
+                for (i, variant) in self.abr_config.variants.iter().enumerate() {
+                    filter_complex.push_str(&format!(
+                        ";[split{}]scale={}:{},fps={}[vout{}]",
+                        i, variant.width, variant.height, variant.framerate, i
+                    ));
+                }
 
-            // Build outputs for each variant
-            let mut outputs = Vec::new();
+                // Build outputs for each variant
+                let mut outputs = Vec::new();
 
-            for (i, variant) in self.abr_config.variants.iter().enumerate() {
-                let variant_output_path = stream_dir.join(&variant.name).join("index.m3u8");
+                for (i, variant) in self.abr_config.variants.iter().enumerate() {
+                    let variant_output_path = stream_dir.join(&variant.name).join("index.m3u8");
 
-                let video_codec_opts = vec![
-                    ("preset", variant.preset.clone()),
-                    ("profile", variant.profile.clone()),
-                    ("b", format!("{}k", variant.bitrate)),
-                    ("maxrate", format!("{}k", (variant.bitrate as f32 * 1.1) as u32)),
-                    ("bufsize", format!("{}k", variant.bitrate * 2)),
-                    ("g", (variant.framerate * 2).to_string()),
-                    ("keyint_min", variant.framerate.to_string()),
-                    ("sc_threshold", "0".to_string()),
-                ];
+                    let video_codec_opts = vec![
+                        ("preset", variant.preset.clone()),
+                        ("profile", variant.profile.clone()),
+                        ("b", format!("{}k", variant.bitrate)),
+                        (
+                            "maxrate",
+                            format!("{}k", (variant.bitrate as f32 * 1.1) as u32),
+                        ),
+                        ("bufsize", format!("{}k", variant.bitrate * 2)),
+                        ("g", (variant.framerate * 2).to_string()),
+                        ("keyint_min", variant.framerate.to_string()),
+                        ("sc_threshold", "0".to_string()),
+                    ];
 
-                let audio_codec_opts = vec![
-                    ("b", format!("{}k", variant.audio_bitrate)),
-                    ("ac", "2".to_string()),
-                ];
+                    let audio_codec_opts = vec![
+                        ("b", format!("{}k", variant.audio_bitrate)),
+                        ("ac", "2".to_string()),
+                    ];
+
+                    let format_opts = vec![
+                        ("hls_time", self.ffmpeg_hls_time.to_string()),
+                        ("hls_list_size", self.ffmpeg_hls_list_size.to_string()),
+                        ("hls_flags", "delete_segments+append_list".to_string()),
+                        ("hls_segment_type", "mpegts".to_string()),
+                        (
+                            "hls_segment_filename",
+                            stream_dir
+                                .join(&variant.name)
+                                .join("segment_%03d.ts")
+                                .to_str()
+                                .unwrap()
+                                .to_string(),
+                        ),
+                    ];
+
+                    let output = Output::from(variant_output_path.to_str().unwrap())
+                        .add_stream_map(&format!("vout{}", i)) // Map the scaled video from filter
+                        .add_stream_map("0:a") // Map audio directly from input
+                        .set_format("hls")
+                        .set_video_codec("libx264")
+                        .set_audio_codec("aac")
+                        .set_video_codec_opts(video_codec_opts)
+                        .set_audio_codec_opts(audio_codec_opts)
+                        .set_format_opts(format_opts);
+
+                    outputs.push(output);
+                }
+
+                // Create master playlist after the stream starts
+                let master_playlist_path = stream_dir.join("master.m3u8");
+                self.create_master_playlist(&master_playlist_path, &self.abr_config.variants)
+                    .await?;
+
+                (filter_complex, outputs)
+            } else {
+                // Single bitrate mode: Just copy the stream
+                info!("Starting single bitrate stream {}", stream_key);
+                let m3u8_path = stream_dir.join("index.m3u8");
+                let segment_path = stream_dir.join(format!("{}_%03d.ts", stream_key));
 
                 let format_opts = vec![
                     ("hls_time", self.ffmpeg_hls_time.to_string()),
                     ("hls_list_size", self.ffmpeg_hls_list_size.to_string()),
                     ("hls_flags", "delete_segments+append_list".to_string()),
-                    ("hls_segment_type", "mpegts".to_string()),
-                    ("hls_segment_filename",
-                        stream_dir.join(&variant.name).join("segment_%03d.ts").to_str().unwrap().to_string()),
+                    (
+                        "hls_segment_filename",
+                        segment_path.to_str().unwrap().to_string(),
+                    ),
                 ];
 
-                let output = Output::from(variant_output_path.to_str().unwrap())
-                    .add_stream_map(&format!("vout{}", i))  // Map the scaled video from filter
-                    .add_stream_map("0:a")  // Map audio directly from input
+                let output = Output::from(m3u8_path.to_str().unwrap())
+                    .add_stream_map("0:v") // Map video stream from input
+                    .add_stream_map("0:a") // Map audio stream from input
                     .set_format("hls")
-                    .set_video_codec("libx264")
-                    .set_audio_codec("aac")
-                    .set_video_codec_opts(video_codec_opts)
-                    .set_audio_codec_opts(audio_codec_opts)
+                    .set_video_codec("copy")
+                    .set_audio_codec("copy")
                     .set_format_opts(format_opts);
 
-                outputs.push(output);
-            }
-
-            // Create master playlist after the stream starts
-            let master_playlist_path = stream_dir.join("master.m3u8");
-            self.create_master_playlist(&master_playlist_path, &self.abr_config.variants).await?;
-
-            (filter_complex, outputs)
-        } else {
-            // Single bitrate mode: Just copy the stream
-            info!("Starting single bitrate stream {}", stream_key);
-            let m3u8_path = stream_dir.join("index.m3u8");
-            let segment_path = stream_dir.join(format!("{}_%03d.ts", stream_key));
-
-            let format_opts = vec![
-                ("hls_time", self.ffmpeg_hls_time.to_string()),
-                ("hls_list_size", self.ffmpeg_hls_list_size.to_string()),
-                ("hls_flags", "delete_segments+append_list".to_string()),
-                ("hls_segment_filename", segment_path.to_str().unwrap().to_string()),
-            ];
-
-            let output = Output::from(m3u8_path.to_str().unwrap())
-                .add_stream_map("0:v")  // Map video stream from input
-                .add_stream_map("0:a")  // Map audio stream from input
-                .set_format("hls")
-                .set_video_codec("copy")
-                .set_audio_codec("copy")
-                .set_format_opts(format_opts);
-
-            ("".to_string(), vec![output])  // Empty string means no filter
-        };
+                ("".to_string(), vec![output]) // Empty string means no filter
+            };
 
         // Build FFmpeg context
-        let mut builder = FfmpegContext::builder()
-            .input(input);
+        let mut builder = FfmpegContext::builder().input(input);
 
         // Add filter if provided and not empty
         if !filter_desc.is_empty() {
@@ -298,7 +311,10 @@ impl StreamManager {
         let context = match builder.build() {
             Ok(ctx) => ctx,
             Err(e) => {
-                error!("Failed to create FFmpeg context for stream {}: {}", stream_key, e);
+                error!(
+                    "Failed to create FFmpeg context for stream {}: {}",
+                    stream_key, e
+                );
                 self.pending_streams.remove(&stream_key);
                 self.stats.failed.fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
@@ -312,17 +328,28 @@ impl StreamManager {
         let running_scheduler = match scheduler.start() {
             Ok(s) => s,
             Err(e) => {
-                error!("Failed to start FFmpeg scheduler for stream {}: {}", stream_key, e);
+                error!(
+                    "Failed to start FFmpeg scheduler for stream {}: {}",
+                    stream_key, e
+                );
                 self.pending_streams.remove(&stream_key);
                 self.stats.failed.fetch_add(1, Ordering::Relaxed);
                 return Ok(false);
             }
         };
 
+        let now = Utc::now();
         let stream_info = StreamInfo {
             scheduler_handle: Arc::new(Mutex::new(Some(running_scheduler))),
-            started_at: Utc::now(),
-            last_accessed: Arc::new(RwLock::new(Utc::now())),
+            started_at: now,
+            last_accessed: Arc::new(RwLock::new(now)),
+            bytes_served: Arc::new(AtomicU64::new(0)),
+            requests_served: Arc::new(AtomicU64::new(0)),
+            segments_served: Arc::new(AtomicU64::new(0)),
+            playlists_served: Arc::new(AtomicU64::new(0)),
+            cache_hits: Arc::new(AtomicU64::new(0)),
+            cache_misses: Arc::new(AtomicU64::new(0)),
+            last_metrics_timestamp: Arc::new(RwLock::new(now)),
         };
 
         self.active_streams.insert(stream_key.clone(), stream_info);
@@ -351,7 +378,10 @@ impl StreamManager {
                             drop(stream_info);
 
                             // FFmpeg job ended (likely failed) - clean up everything
-                            error!("FFmpeg job ended unexpectedly for stream: {}", stream_key_monitor);
+                            error!(
+                                "FFmpeg job ended unexpectedly for stream: {}",
+                                stream_key_monitor
+                            );
 
                             // Remove from active streams
                             active_streams_monitor.remove(&stream_key_monitor);
@@ -366,11 +396,17 @@ impl StreamManager {
                             let stream_dir = hls_path_monitor.join(&stream_key_monitor);
                             if stream_dir.exists() {
                                 if let Err(e) = fs::remove_dir_all(&stream_dir).await {
-                                    error!("Failed to clean up stream directory for {}: {}", stream_key_monitor, e);
+                                    error!(
+                                        "Failed to clean up stream directory for {}: {}",
+                                        stream_key_monitor, e
+                                    );
                                 }
                             }
 
-                            info!("Cleaned up failed stream {}, ready for restart", stream_key_monitor);
+                            info!(
+                                "Cleaned up failed stream {}, ready for restart",
+                                stream_key_monitor
+                            );
                             break;
                         }
                     } else {
@@ -427,7 +463,11 @@ impl StreamManager {
         Ok(())
     }
 
-    async fn create_master_playlist(&self, path: &std::path::Path, variants: &[crate::config::StreamVariant]) -> Result<()> {
+    async fn create_master_playlist(
+        &self,
+        path: &std::path::Path,
+        variants: &[crate::config::StreamVariant],
+    ) -> Result<()> {
         let mut content = String::from("#EXTM3U\n#EXT-X-VERSION:3\n");
 
         for variant in variants {

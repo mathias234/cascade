@@ -2,32 +2,30 @@ use crate::config::ElasticsearchConfig;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use elasticsearch::{
-    http::transport::Transport,
     BulkOperation, BulkParts, Elasticsearch,
+    auth::Credentials,
+    http::transport::{SingleNodeConnectionPool, TransportBuilder},
     indices::IndicesPutIndexTemplateParts,
 };
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsDocument {
     #[serde(rename = "@timestamp")]
     pub timestamp: DateTime<Utc>,
     pub server_name: String,
+    pub stream_name: String,
     pub bytes_per_second: f64,
     pub requests_per_second: f64,
     pub segments_per_second: f64,
     pub viewers: usize,
-    pub active_streams: usize,
     pub cache_hit_rate: f64,
-    pub cache_memory_mb: f64,
-    pub cache_entries: usize,
     pub mbps: f64,
-    pub stream_viewers: HashMap<String, usize>,
 }
 
 #[derive(Debug)]
@@ -49,8 +47,15 @@ impl ElasticsearchClient {
     pub fn new(config: &ElasticsearchConfig) -> Result<Self> {
         let client = if config.enabled {
             let url = config.url.as_deref().unwrap_or("http://localhost:9200");
-            let transport = Transport::single_node(url)
-                .context("Failed to create Elasticsearch transport")?;
+
+            let parsed_url = Url::parse(&url)?;
+            let conn_pool = SingleNodeConnectionPool::new(parsed_url);
+
+            let credentials =
+                Credentials::Basic(config.username.to_string(), config.password.to_string());
+
+            let transport = TransportBuilder::new(conn_pool).auth(credentials).build()?;
+
             let client = Elasticsearch::new(transport);
             debug!("Elasticsearch client initialized with URL: {}", url);
             Some(client)
@@ -60,12 +65,16 @@ impl ElasticsearchClient {
         };
 
         // Use provided server_name or generate a default
-        let server_name = config.server_name.clone().unwrap_or_else(|| {
-            format!("cascade-{}", Utc::now().timestamp())
-        });
+        let server_name = config
+            .server_name
+            .clone()
+            .unwrap_or_else(|| format!("cascade-{}", Utc::now().timestamp()));
 
         if config.enabled {
-            debug!("Elasticsearch client initialized with server_name: {}", server_name);
+            info!(
+                "Elasticsearch client initialized with server_name: {}",
+                server_name
+            );
         }
 
         Ok(Self {
@@ -81,15 +90,18 @@ impl ElasticsearchClient {
         })
     }
 
-    pub async fn index_metrics(&self, mut metrics: MetricsDocument) {
-        // Ensure the metrics document has the correct server_name
-        metrics.server_name = self.server_name.clone();
-        if self.client.is_none() {
+    pub async fn index_metrics(&self, metrics: Vec<MetricsDocument>) {
+        if self.client.is_none() || metrics.is_empty() {
             return;
         }
 
         let mut buffer = self.buffer.write().await;
-        buffer.buffer.push(metrics);
+
+        // Add all metrics with server_name set
+        for mut metric in metrics {
+            metric.server_name = self.server_name.clone();
+            buffer.buffer.push(metric);
+        }
 
         let should_flush = buffer.buffer.len() >= self.batch_size
             || Utc::now()
@@ -197,6 +209,9 @@ impl ElasticsearchClient {
                             "server_name": {
                                 "type": "keyword"
                             },
+                            "stream_name": {
+                                "type": "keyword"
+                            },
                             "bytes_per_second": {
                                 "type": "double"
                             },
@@ -209,24 +224,11 @@ impl ElasticsearchClient {
                             "viewers": {
                                 "type": "long"
                             },
-                            "active_streams": {
-                                "type": "long"
-                            },
                             "cache_hit_rate": {
                                 "type": "double"
                             },
-                            "cache_memory_mb": {
-                                "type": "double"
-                            },
-                            "cache_entries": {
-                                "type": "long"
-                            },
                             "mbps": {
                                 "type": "double"
-                            },
-                            "stream_viewers": {
-                                "type": "object",
-                                "enabled": true
                             }
                         }
                     }

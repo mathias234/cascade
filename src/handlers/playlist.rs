@@ -1,4 +1,4 @@
-use crate::handlers::common::{rewrite_playlist_urls, track_request_stats};
+use crate::handlers::common::rewrite_playlist_urls;
 use crate::manager::StreamManager;
 use axum::{
     body::Body,
@@ -44,9 +44,25 @@ pub async fn serve_playlist(
                 content_size
             );
 
-            // Track stats
-            manager.stats.playlists_served.fetch_add(1, Ordering::Relaxed);
-            track_request_stats(&manager, content_size);
+            // Track per-stream metrics
+            if let Some(stream_info) = manager.active_streams.get(stream_key) {
+                stream_info.playlists_served.fetch_add(1, Ordering::Relaxed);
+                stream_info.requests_served.fetch_add(1, Ordering::Relaxed);
+                stream_info
+                    .bytes_served
+                    .fetch_add(content_size as u64, Ordering::Relaxed);
+            }
+
+            // Track global stats (for stream lifecycle tracking only)
+            manager
+                .stats
+                .playlists_served
+                .fetch_add(1, Ordering::Relaxed);
+            manager.stats.requests.fetch_add(1, Ordering::Relaxed);
+            manager
+                .stats
+                .bytes_served
+                .fetch_add(content_size as u64, Ordering::Relaxed);
 
             Response::builder()
                 .status(StatusCode::OK)
@@ -56,10 +72,7 @@ pub async fn serve_playlist(
                 .unwrap()
         }
         Err(e) => {
-            error!(
-                "Failed to read playlist file {:?}: {}",
-                file_path, e
-            );
+            error!("Failed to read playlist file {:?}: {}", file_path, e);
             Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::from("Playlist not found"))
@@ -87,8 +100,11 @@ pub async fn handle_initial_request_with_session(
             .unwrap();
     }
 
-    // Update stats
-    track_request_stats(&manager, 0);
+    // Track request for stream
+    if let Some(stream_info) = manager.active_streams.get(stream_key) {
+        stream_info.requests_served.fetch_add(1, Ordering::Relaxed);
+    }
+    manager.stats.requests.fetch_add(1, Ordering::Relaxed);
 
     // Generate a new session for this viewer
     let session_id = manager.session_manager.create_session(stream_key);

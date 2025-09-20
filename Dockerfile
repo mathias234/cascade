@@ -1,5 +1,5 @@
 # Use cargo-chef for efficient Docker layer caching
-FROM rust:1.89-bullseye AS chef
+FROM rust:1.90 AS chef
 WORKDIR /app
 
 # Planner stage - prepare the build recipe
@@ -14,12 +14,21 @@ COPY . .
 RUN apt-get update && apt-get install -y \
     musl-dev \
     libssl-dev \
-    pkg-config
+    pkg-config \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libavdevice-dev \
+    libavfilter-dev \
+    pkg-config \
+    libclang-dev \
+    clang
 
 RUN cargo build --release --features ssl --bin cascade
 
 # Runtime stage
-FROM rust:1.89-bullseye
+FROM rust:1.90
 
 RUN apt-get update && apt-get install -y \
     ffmpeg \
@@ -34,9 +43,6 @@ RUN mkdir -p /hls /var/log/supervisor
 
 # Copy the compiled binary from builder
 COPY --from=builder /app/target/release/cascade /cascade
-
-# Copy dashboard HTML file
-COPY dashboard.html /dashboard.html
 
 # Make it executable
 RUN chmod +x /cascade

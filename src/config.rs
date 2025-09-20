@@ -97,6 +97,8 @@ pub struct ElasticsearchConfig {
     pub batch_size: usize,
     pub flush_interval_seconds: u64,
     pub server_name: Option<String>,
+    pub username: String,
+    pub password: String,
 }
 
 impl Config {
@@ -201,6 +203,8 @@ impl Config {
                 batch_size: 10,
                 flush_interval_seconds: 10,
                 server_name: None,
+                username: "elastic".to_string(),
+                password: "admin".to_string(),
             },
         }
     }
